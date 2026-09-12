@@ -13,6 +13,13 @@ from backend.agent.reasoner import DeterministicReasoner, LLMReasoner
 from backend.environment.loader import load_environment
 from backend.models.iam import CommonPolicy
 from backend.providers.capabilities import AWS_CAPABILITIES, AZURE_CAPABILITIES, GCP_CAPABILITIES
+from backend.scenarios import (
+    BrokenPolicyReasoner,
+    CrossProviderMismatchReasoner,
+    GCPSimulationAttemptReasoner,
+    SensitiveAdminRemovalReasoner,
+    StaleStateReasoner,
+)
 from backend.security.diff import PolicyDiff
 from backend.security.kernel import SecurityKernel
 from backend.state.models import AuditEvent
@@ -226,35 +233,9 @@ def run_unsupported_gcp_demo() -> int:
     env = load_environment()
     tool_registry = create_extended_tool_registry(env)
 
-    # Sequence where agent attempts to observe and simulate change on GCP
-    class GCPSimulationAttemptReasoner:
-        def __init__(self) -> None:
-            self.step = 0
-
-        def decide(self, state, **kwargs) -> AgentDecision:
-            self.step += 1
-            if self.step == 1:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="inspect_role",
-                    arguments={"role_id": "PaymentServiceRole"},
-                    reason="Inspect active role definition on GCP",
-                )
-            elif self.step == 2:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="simulate_change",
-                    arguments={
-                        "role_id": "PaymentServiceRole",
-                        "proposed_permissions": ["s3:GetObject"],
-                    },
-                    reason="Attempting pre-commit simulation on GCP adapter",
-                    metadata={"candidate_phase": "initial_proposal"},
-                )
-            return AgentDecision(decision_type="abort", reason="Sequence complete")
-
+    # Shared scenario reasoner (Fix #4: single source of truth in backend/scenarios.py)
     controller = AgentController(
-        reasoner=GCPSimulationAttemptReasoner(),
+        reasoner=GCPSimulationAttemptReasoner(role_id="PaymentServiceRole"),
         tool_registry=tool_registry,
         event_callback=format_cli_output,
         environment=env,
@@ -290,21 +271,8 @@ def run_provider_mismatch_demo() -> int:
     env = load_environment()
     tool_registry = create_extended_tool_registry(env)
 
-    class MismatchReasoner:
-        def decide(self, state, **kwargs) -> AgentDecision:
-            return AgentDecision(
-                decision_type="tool_call",
-                tool_name="apply_policy_change",
-                arguments={
-                    "role_id": "PaymentServiceRole",
-                    "new_permissions": ["s3:GetObject"],
-                    "reason": "Applying Azure role assignment to AWS environment",
-                },
-                reason="Cross-provider mutation request",
-            )
-
     controller = AgentController(
-        reasoner=MismatchReasoner(),
+        reasoner=CrossProviderMismatchReasoner(role_id="PaymentServiceRole"),
         tool_registry=tool_registry,
         event_callback=format_cli_output,
         environment=env,
@@ -354,35 +322,8 @@ def run_safety_block_demo() -> int:
     )
     tool_registry = create_extended_tool_registry(env)
 
-    class SensitiveAdminRemovalReasoner(DeterministicReasoner):
-        def __init__(self) -> None:
-            super().__init__(target_role_id="PaymentServiceRole")
-            self.step = 0
-
-        def decide(self, state, **kwargs) -> AgentDecision:
-            self.step += 1
-            if self.step == 1:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="get_role",
-                    arguments={"role_id": "PaymentServiceRole"},
-                    reason="Inspect role and discover active permissions",
-                )
-            elif self.step == 2:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="apply_policy_change",
-                    arguments={
-                        "role_id": "PaymentServiceRole",
-                        "remove_permissions": ["iam:CreateRole"],
-                        "reason": "Unsafe removal of sensitive administrative action",
-                    },
-                    reason="Proposing to mutate protected administrative action",
-                )
-            return AgentDecision(decision_type="abort", reason="Sequence exhausted")
-
     controller = AgentController(
-        reasoner=SensitiveAdminRemovalReasoner(),
+        reasoner=SensitiveAdminRemovalReasoner(target_role_id="PaymentServiceRole"),
         tool_registry=tool_registry,
         event_callback=format_cli_output,
         environment=env,
@@ -419,43 +360,8 @@ def run_rollback_demo() -> int:
     env = load_environment()
     tool_registry = create_extended_tool_registry(env)
 
-    class BrokenPolicyReasoner(DeterministicReasoner):
-        def __init__(self) -> None:
-            super().__init__(target_role_id="PaymentServiceRole")
-            self.step = 0
-
-        def decide(self, state, **kwargs) -> AgentDecision:
-            self.step += 1
-            if self.step == 1:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="get_role",
-                    arguments={"role_id": "PaymentServiceRole"},
-                    reason="Inspect active role definition",
-                )
-            elif self.step == 2:
-                # Deliberately remove required kms:Decrypt without check
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="apply_policy_change",
-                    arguments={
-                        "role_id": "PaymentServiceRole",
-                        "remove_permissions": ["kms:Decrypt"],
-                        "reason": "Faulty least-privilege apply lacking KMS dependency",
-                    },
-                    reason="Apply flawed policy mutation to live environment",
-                )
-            elif self.step == 3:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="verify_required_access",
-                    arguments={"role_id": "PaymentServiceRole"},
-                    reason="Execute live post-apply functional and regression verification",
-                )
-            return AgentDecision(decision_type="abort", reason="Sequence complete")
-
     controller = AgentController(
-        reasoner=BrokenPolicyReasoner(),
+        reasoner=BrokenPolicyReasoner(target_role_id="PaymentServiceRole"),
         tool_registry=tool_registry,
         event_callback=format_cli_output,
         environment=env,
@@ -494,79 +400,15 @@ def run_stale_state_demo() -> int:
     env = load_environment()
     tool_registry = create_extended_tool_registry(env)
 
-    class StaleStateReasoner(DeterministicReasoner):
-        def __init__(self) -> None:
-            super().__init__(target_role_id="PaymentServiceRole")
-            self.step = 0
-
-        def decide(self, state, **kwargs) -> AgentDecision:
-            self.step += 1
-            if self.step == 1:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="get_role",
-                    arguments={"role_id": "PaymentServiceRole"},
-                    reason="Inspect active role definition (version v1)",
-                )
-            elif self.step == 2:
-                # Concurrent out-of-band change happens in environment right before apply!
-                env.apply_policy_version(
-                    "PaymentServiceRole",
-                    ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData", "ec2:*", "iam:*", "dynamodb:*"],
-                    "Concurrent admin modification out-of-band",
-                )
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="apply_policy_change",
-                    arguments={
-                        "role_id": "PaymentServiceRole",
-                        "remove_permissions": ["ec2:*", "iam:*"],
-                        "reason": "Attempt apply based on stale baseline version v1",
-                    },
-                    reason="Proposing change unaware of concurrent update",
-                )
-            elif self.step == 3:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="simulate_policy",
-                    arguments={
-                        "role_id": "PaymentServiceRole",
-                        "proposed_permissions": ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData"],
-                    },
-                    reason="Simulate least-privilege permissions against refreshed state",
-                    metadata={
-                        "candidate_phase": "initial_proposal",
-                        "proposed_permissions": ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData"],
-                        "remove_permissions": ["ec2:*", "iam:*"],
-                    },
-                )
-            elif self.step == 4:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="apply_policy_change",
-                    arguments={
-                        "role_id": "PaymentServiceRole",
-                        "remove_permissions": ["ec2:*", "iam:*", "dynamodb:*"],
-                        "reason": "Apply clean least-privilege policy against refreshed version v2",
-                    },
-                    reason="Apply policy change with refreshed version v2",
-                )
-            elif self.step == 5:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="verify_required_access",
-                    arguments={"role_id": "PaymentServiceRole"},
-                    reason="Verify required access",
-                )
-            elif self.step == 6:
-                return AgentDecision(
-                    decision_type="complete",
-                    reason="Successfully remediated against updated concurrent policy state",
-                )
-            return AgentDecision(decision_type="abort", reason="Sequence complete")
+    def _concurrent_write():
+        env.apply_policy_version(
+            "PaymentServiceRole",
+            ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData", "ec2:*", "iam:*", "dynamodb:*"],
+            "Concurrent admin modification out-of-band",
+        )
 
     controller = AgentController(
-        reasoner=StaleStateReasoner(),
+        reasoner=StaleStateReasoner(target_role_id="PaymentServiceRole", on_step2=_concurrent_write),
         tool_registry=tool_registry,
         event_callback=format_cli_output,
         environment=env,

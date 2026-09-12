@@ -6,7 +6,7 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,10 +21,18 @@ from backend.providers.capabilities import (
     AZURE_CAPABILITIES,
     GCP_CAPABILITIES,
 )
+from backend.scenarios import (
+    BrokenPolicyReasoner,
+    CrossProviderMismatchReasoner,
+    GCPSimulationAttemptReasoner,
+    SensitiveAdminRemovalReasoner,
+    StaleStateReasoner,
+    normalize_scenario,
+)
 from backend.security.diff import PolicyDiff
 from backend.security.kernel import SecurityKernel
 from backend.state.models import AgentState, AuditEvent
-from backend.state.store import InMemoryStateStore
+from backend.state.store import InMemoryStateStore, JSONFileStateStore, SQLiteStateStore
 from backend.tools.iam_tools import create_extended_tool_registry
 
 app = FastAPI(
@@ -33,17 +41,58 @@ app = FastAPI(
     version="3.0.0",
 )
 
-# Enable CORS for local frontend development
+# Enable CORS for local frontend development (Fix #2: no wildcard + credentials combo)
+def _allowed_origins() -> list[str]:
+    raw = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://localhost:8000,http://127.0.0.1:5173,http://127.0.0.1:8000",
+    )
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+_ALLOWED_ORIGINS = _allowed_origins()
+_ALLOW_CREDENTIALS = "*" not in _ALLOWED_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global in-memory state store to persist runs across API calls
-state_store = InMemoryStateStore()
+# Global state store (Fix #3: persistent by default, memory for tests).
+# STATE_STORE=memory|json|sqlite (default: sqlite). DB path ignored via *.db in .gitignore.
+def _build_state_store():
+    backend = os.getenv("STATE_STORE", "sqlite").lower()
+    if backend == "memory":
+        return InMemoryStateStore()
+    if backend == "json":
+        return JSONFileStateStore(directory=os.getenv("RUNS_DIR", "data/runs"))
+    return SQLiteStateStore(db_path=os.getenv("RUNS_DB", "data/iam_runs.db"))
+
+
+state_store = _build_state_store()
+
+# Minimal in-memory rate limiter for expensive agent runs (Fix #8).
+# 30 POST /api/agent/run per minute per client IP. No extra deps.
+import time as _time
+
+_RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_PER_MIN", "30"))
+_RATE_WINDOW = 60.0
+_rate_buckets: dict[str, list[float]] = {}
+
+
+def _rate_limited(client_id: str) -> bool:
+    now = _time.time()
+    hits = _rate_buckets.get(client_id, [])
+    hits = [t for t in hits if now - t < _RATE_WINDOW]
+    if len(hits) >= _RATE_LIMIT_MAX:
+        _rate_buckets[client_id] = hits
+        return True
+    hits.append(now)
+    _rate_buckets[client_id] = hits
+    return False
 
 
 class AgentRunRequest(BaseModel):
@@ -257,41 +306,16 @@ def _execute_run(
     """Core scenario execution function driving the agent loop."""
     env = load_environment()
     tool_registry = create_extended_tool_registry(env)
-    scenario = (request.scenario or "aws").lower()
+    scenario = normalize_scenario(request.scenario)
 
     def on_event(event: AuditEvent):
         if target_state_holder is not None:
             state_store.save(target_state_holder)
 
-    # 1. Unsupported GCP Scenario
-    if scenario in ("unsupported_gcp", "unsupported-gcp"):
-        class GCPSimulationAttemptReasoner:
-            def __init__(self) -> None:
-                self.step = 0
-            def decide(self, state, **kwargs) -> AgentDecision:
-                self.step += 1
-                if self.step == 1:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="inspect_role",
-                        arguments={"role_id": request.role_id},
-                        reason="Inspect active role definition on GCP",
-                    )
-                elif self.step == 2:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="simulate_change",
-                        arguments={
-                            "role_id": request.role_id,
-                            "proposed_permissions": ["s3:GetObject"],
-                        },
-                        reason="Attempting pre-commit simulation on GCP adapter",
-                        metadata={"candidate_phase": "initial_proposal"},
-                    )
-                return AgentDecision(decision_type="abort", reason="Sequence complete")
-
+    # 1. Unsupported GCP Scenario (shared reasoner, Fix #4)
+    if scenario == "unsupported_gcp":
         controller = AgentController(
-            reasoner=GCPSimulationAttemptReasoner(),
+            reasoner=GCPSimulationAttemptReasoner(role_id=request.role_id),
             tool_registry=tool_registry,
             state_store=state_store,
             event_callback=on_event,
@@ -305,22 +329,9 @@ def _execute_run(
         )
 
     # 2. Provider Mismatch Scenario
-    elif scenario in ("provider_mismatch", "provider-mismatch"):
-        class MismatchReasoner:
-            def decide(self, state, **kwargs) -> AgentDecision:
-                return AgentDecision(
-                    decision_type="tool_call",
-                    tool_name="apply_policy_change",
-                    arguments={
-                        "role_id": request.role_id,
-                        "new_permissions": ["s3:GetObject"],
-                        "reason": "Applying Azure role assignment to AWS environment",
-                    },
-                    reason="Cross-provider mutation request",
-                )
-
+    elif scenario == "provider_mismatch":
         controller = AgentController(
-            reasoner=MismatchReasoner(),
+            reasoner=CrossProviderMismatchReasoner(role_id=request.role_id),
             tool_registry=tool_registry,
             state_store=state_store,
             event_callback=on_event,
@@ -339,40 +350,14 @@ def _execute_run(
         )
 
     # 3. Safety Block Scenario
-    elif scenario in ("safety_block", "safety-block"):
+    elif scenario == "safety_block":
         env.apply_policy_version(
             request.role_id,
             ["s3:GetObject", "iam:CreateRole", "kms:Decrypt"],
             "Baseline with admin capability",
         )
-        class SensitiveAdminRemovalReasoner(DeterministicReasoner):
-            def __init__(self) -> None:
-                super().__init__(target_role_id=request.role_id)
-                self.step = 0
-            def decide(self, state, **kwargs) -> AgentDecision:
-                self.step += 1
-                if self.step == 1:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="get_role",
-                        arguments={"role_id": request.role_id},
-                        reason="Inspect role and discover active permissions",
-                    )
-                elif self.step == 2:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="apply_policy_change",
-                        arguments={
-                            "role_id": request.role_id,
-                            "remove_permissions": ["iam:CreateRole"],
-                            "reason": "Unsafe removal of sensitive administrative action",
-                        },
-                        reason="Proposing to mutate protected administrative action",
-                    )
-                return AgentDecision(decision_type="abort", reason="Sequence exhausted")
-
         controller = AgentController(
-            reasoner=SensitiveAdminRemovalReasoner(),
+            reasoner=SensitiveAdminRemovalReasoner(target_role_id=request.role_id),
             tool_registry=tool_registry,
             state_store=state_store,
             event_callback=on_event,
@@ -386,42 +371,9 @@ def _execute_run(
         )
 
     # 4. Rollback Scenario
-    elif scenario in ("rollback", "verification_rollback"):
-        class BrokenPolicyReasoner(DeterministicReasoner):
-            def __init__(self) -> None:
-                super().__init__(target_role_id=request.role_id)
-                self.step = 0
-            def decide(self, state, **kwargs) -> AgentDecision:
-                self.step += 1
-                if self.step == 1:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="get_role",
-                        arguments={"role_id": request.role_id},
-                        reason="Inspect active role definition",
-                    )
-                elif self.step == 2:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="apply_policy_change",
-                        arguments={
-                            "role_id": request.role_id,
-                            "remove_permissions": ["kms:Decrypt"],
-                            "reason": "Faulty least-privilege apply lacking KMS dependency",
-                        },
-                        reason="Apply flawed policy mutation to live environment",
-                    )
-                elif self.step == 3:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="verify_required_access",
-                        arguments={"role_id": request.role_id},
-                        reason="Execute live post-apply functional and regression verification",
-                    )
-                return AgentDecision(decision_type="abort", reason="Sequence complete")
-
+    elif scenario == "rollback":
         controller = AgentController(
-            reasoner=BrokenPolicyReasoner(),
+            reasoner=BrokenPolicyReasoner(target_role_id=request.role_id),
             tool_registry=tool_registry,
             state_store=state_store,
             event_callback=on_event,
@@ -435,78 +387,16 @@ def _execute_run(
         )
 
     # 5. Stale State Scenario
-    elif scenario in ("stale_state", "stale-state"):
-        class StaleStateReasoner(DeterministicReasoner):
-            def __init__(self) -> None:
-                super().__init__(target_role_id=request.role_id)
-                self.step = 0
-            def decide(self, state, **kwargs) -> AgentDecision:
-                self.step += 1
-                if self.step == 1:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="get_role",
-                        arguments={"role_id": request.role_id},
-                        reason="Inspect active role definition (version v1)",
-                    )
-                elif self.step == 2:
-                    env.apply_policy_version(
-                        request.role_id,
-                        ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData", "ec2:*", "iam:*", "dynamodb:*"],
-                        "Concurrent admin modification out-of-band",
-                    )
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="apply_policy_change",
-                        arguments={
-                            "role_id": request.role_id,
-                            "remove_permissions": ["ec2:*", "iam:*"],
-                            "reason": "Attempt apply based on stale baseline version v1",
-                        },
-                        reason="Proposing change unaware of concurrent update",
-                    )
-                elif self.step == 3:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="simulate_policy",
-                        arguments={
-                            "role_id": request.role_id,
-                            "proposed_permissions": ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData"],
-                        },
-                        reason="Simulate least-privilege permissions against refreshed state",
-                        metadata={
-                            "candidate_phase": "initial_proposal",
-                            "proposed_permissions": ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData"],
-                            "remove_permissions": ["ec2:*", "iam:*"],
-                        },
-                    )
-                elif self.step == 4:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="apply_policy_change",
-                        arguments={
-                            "role_id": request.role_id,
-                            "remove_permissions": ["ec2:*", "iam:*", "dynamodb:*"],
-                            "reason": "Apply clean least-privilege policy against refreshed version v2",
-                        },
-                        reason="Apply policy change with refreshed version v2",
-                    )
-                elif self.step == 5:
-                    return AgentDecision(
-                        decision_type="tool_call",
-                        tool_name="verify_required_access",
-                        arguments={"role_id": request.role_id},
-                        reason="Verify required access",
-                    )
-                elif self.step == 6:
-                    return AgentDecision(
-                        decision_type="complete",
-                        reason="Successfully remediated against updated concurrent policy state",
-                    )
-                return AgentDecision(decision_type="abort", reason="Sequence complete")
+    elif scenario == "stale_state":
+        def _concurrent_write():
+            env.apply_policy_version(
+                request.role_id,
+                ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData", "ec2:*", "iam:*", "dynamodb:*"],
+                "Concurrent admin modification out-of-band",
+            )
 
         controller = AgentController(
-            reasoner=StaleStateReasoner(),
+            reasoner=StaleStateReasoner(target_role_id=request.role_id, on_step2=_concurrent_write),
             tool_registry=tool_registry,
             state_store=state_store,
             event_callback=on_event,
@@ -542,8 +432,15 @@ def _execute_run(
 
 
 @app.post("/api/agent/run", response_model=AgentRunResponse)
-def run_agent(request: AgentRunRequest) -> AgentRunResponse:
+def run_agent(request: AgentRunRequest, http_req: Request) -> AgentRunResponse:
     """Trigger an autonomous least-privilege mitigation run."""
+    # Fix #8: basic per-IP rate limit (30/min default, configurable via RATE_LIMIT_PER_MIN).
+    try:
+        client_id = http_req.client.host if http_req and http_req.client else "unknown"
+    except Exception:
+        client_id = "unknown"
+    if _rate_limited(client_id):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded: max 30 agent runs/minute.")
     if request.async_run:
         import uuid
         run_id = f"run-{uuid.uuid4().hex[:8]}"
@@ -558,7 +455,10 @@ def run_agent(request: AgentRunRequest) -> AgentRunResponse:
 
         def runner():
             try:
-                _execute_run(request, target_state_holder=initial_state)
+                # Fix #9: preserve polling run_id so GET /api/agent/run/{run_id} works.
+                final_state = _execute_run(request)
+                final_state.run_id = run_id
+                state_store.save(final_state)
             except Exception as ex:
                 initial_state.current_phase = "FAILED"
                 initial_state.stop_reason = "system_error"
