@@ -199,3 +199,48 @@ export interface RunSummary {
   blast_radius: string;
   created_at?: string;
 }
+
+export interface AttackGraph {
+  role_id: string;
+  nodes: Array<{ id: string; kind: string; label: string; risk: string; protected: boolean }>;
+  edges: Array<{ from_id: string; to_id: string; via: string }>;
+  paths: Array<{ path: string[]; reaches_protected: boolean; severity: string }>;
+  reachable_resources: string[];
+  protected_reachable: string[];
+  risk_score: number;
+  risk_level: string;
+  paths_blocked_by_proposal?: number;
+}
+
+export interface TemporalFinding {
+  permission: string;
+  uses_30d: number;
+  uses_365d: number;
+  days_since_last_use?: number | null;
+  dependency_linked: boolean;
+  classification: 'FREQUENT' | 'RARE_BUT_CRITICAL' | 'SEASONAL_CANDIDATE' | 'DEAD';
+  recommendation: 'RETAIN' | 'REVIEW' | 'REMOVE';
+  confidence: number;
+  reason: string;
+}
+
+export interface TemporalReport {
+  role_id: string;
+  window_days: number;
+  findings: TemporalFinding[];
+  retain: string[];
+  review: string[];
+  remove: string[];
+}
+
+export interface TerraformExport {
+  role_id: string;
+  hcl: string;
+  terraform_json: Record<string, any>;
+  pr_body: string;
+  removed: string[];
+  retained: string[];
+  blast: { level: string; score: number; factors: string[] };
+  attack_paths_blocked: number;
+  temporal: TemporalReport;
+}

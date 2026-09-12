@@ -280,7 +280,15 @@ python main.py --demo provider-mismatch
 
 ---
 
-## 9. Known Limitations
+## 9. Hero Features (Zero-to-Hero)
+
+1. **Real AWS Read-Only + Terraform PR Mode** — `GET /api/aws/live-status`, `POST /api/export/terraform`, CLI ` --live-status / --export-tf policy.tf`. Live IAM reads via boto3 when credentials exist, otherwise deterministic simulator fallback. Mutations are proposed as Terraform HCL + PR body with Security Kernel checklist — never direct live writes (`LIVE_MUTATION_ENABLED=false` by default).
+2. **Attack-Path Graph** — `GET /api/roles/{id}/attack-graph`, tool `get_attack_graph`, UI `AttackGraphView`. BFS from role permissions to reachable (incl. protected) resources with risk score; `paths_blocked()` quantifies PR impact.
+3. **Temporal Rare-but-Critical Mining** — `GET /api/roles/{id}/temporal`, tool `analyze_temporal_usage`, UI `TemporalPanel`. Classifies `FREQUENT / RARE_BUT_CRITICAL / SEASONAL_CANDIDATE / DEAD` over 365d; `kms:Decrypt` (0 logs + SSE-KMS dependency) is retained, proving `NOT OBSERVED != PROVEN UNNEEDED`.
+
+---
+
+## 10. Known Limitations
 
 1. **GCP & Azure Local Simulation**: The local simulator currently supports AWS-style action simulation. GCP and Azure adapters truthfully escalate when pre-commit simulation is requested, rather than hallucinating outcomes.
 2. **LLM Reasoner Offline Fallback**: In environments without a valid Gemini/OpenAI API key, the system automatically falls back to the deterministic reasoner, guaranteeing identical, predictable execution for demonstrations.

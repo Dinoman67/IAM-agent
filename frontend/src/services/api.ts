@@ -1,5 +1,6 @@
 import {
   AgentRunResponse,
+  AttackGraph,
   DashboardMetrics,
   DemoScenario,
   Principal,
@@ -8,6 +9,8 @@ import {
   Role,
   RunSummary,
   ServiceDependency,
+  TemporalReport,
+  TerraformExport,
   Workflow,
 } from '../types';
 
@@ -99,5 +102,35 @@ export async function getAgentRun(runId: string): Promise<AgentRunResponse> {
   if (!res.ok) {
     throw new Error(`Run '${runId}' not found: ${res.statusText}`);
   }
+  return res.json();
+}
+
+export async function getAttackGraph(roleId: string): Promise<AttackGraph> {
+  const res = await fetch(`${API_BASE}/api/roles/${encodeURIComponent(roleId)}/attack-graph`);
+  if (!res.ok) throw new Error(`Attack graph failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getTemporal(roleId: string, windowDays = 365): Promise<TemporalReport> {
+  const res = await fetch(
+    `${API_BASE}/api/roles/${encodeURIComponent(roleId)}/temporal?window_days=${windowDays}`,
+  );
+  if (!res.ok) throw new Error(`Temporal analysis failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function exportTerraform(roleId: string, permissions?: string[]): Promise<TerraformExport> {
+  const res = await fetch(`${API_BASE}/api/export/terraform`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role_id: roleId, permissions: permissions ?? null }),
+  });
+  if (!res.ok) throw new Error(`Terraform export failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getAWSLiveStatus(): Promise<{ live: boolean; reason?: string; region?: string }> {
+  const res = await fetch(`${API_BASE}/api/aws/live-status`);
+  if (!res.ok) throw new Error(`Live status failed: ${res.statusText}`);
   return res.json();
 }

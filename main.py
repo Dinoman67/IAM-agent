@@ -461,8 +461,66 @@ def main() -> None:
         action="store_true",
         help="Run with deterministic mock reasoner (no API key required)",
     )
+    parser.add_argument(
+        "--export-tf",
+        type=str,
+        default=None,
+        help="Export least-privilege Terraform HCL to file (e.g. --export-tf policy.tf)",
+    )
+    parser.add_argument(
+        "--live-status",
+        action="store_true",
+        help="Probe read-only AWS connectivity and exit",
+    )
+    parser.add_argument(
+        "--attack-graph",
+        action="store_true",
+        help="Print attacker-reachable resources for the role and exit",
+    )
+    parser.add_argument(
+        "--temporal",
+        action="store_true",
+        help="Print temporal permission classification and exit",
+    )
 
     args = parser.parse_args()
+
+    if args.live_status:
+        from backend.connectors.aws_readonly import AWSReadOnlyConnector
+
+        print(AWSReadOnlyConnector().status())
+        sys.exit(0)
+    if args.attack_graph:
+        from backend.environment.loader import load_environment as _load
+        from backend.security.attack_graph import compute_attack_graph as _ag
+
+        g = _ag(args.role, _load())
+        print(f"Attack risk {g.risk_level} ({g.risk_score}) — {len(g.paths)} paths, protected: {g.protected_reachable}")
+        for p in g.paths[:10]:
+            print("  " + " -> ".join(p.path))
+        sys.exit(0)
+    if args.temporal:
+        from backend.environment.loader import load_environment as _load2
+        from backend.security.temporal import classify_permissions as _tc
+
+        r = _tc(args.role, _load2())
+        for f in r.findings:
+            print(f"{f.permission}: {f.classification} -> {f.recommendation} ({f.reason})")
+        sys.exit(0)
+    if args.export_tf:
+        from backend.environment.loader import load_environment as _load3
+        from backend.export.terraform import to_terraform_hcl as _hcl
+
+        env = _load3()
+        role = env.get_role(args.role)
+        if not role:
+            print(f"Role '{args.role}' not found.", file=sys.stderr)
+            sys.exit(2)
+        hcl = _hcl(args.role, role.active_permissions())
+        with open(args.export_tf, "w", encoding="utf-8") as fh:
+            fh.write(hcl)
+        print(f"Wrote Terraform to {args.export_tf}")
+        sys.exit(0)
 
     if args.demo == "unsupported-gcp":
         exit_code = run_unsupported_gcp_demo()
