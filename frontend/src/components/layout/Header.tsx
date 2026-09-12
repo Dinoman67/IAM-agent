@@ -1,10 +1,12 @@
 import React from 'react';
 import { Activity, Cloud, History, Layers, Shield, Sparkles } from 'lucide-react';
 
+export type NavKey = 'landing' | 'dashboard' | 'remediation' | 'providers' | 'audit' | 'learn';
+
 interface HeaderProps {
   systemHealthy: boolean;
-  activeNav: 'dashboard' | 'remediation' | 'providers' | 'audit';
-  onSelectNav: (nav: 'dashboard' | 'remediation' | 'providers' | 'audit') => void;
+  activeNav: NavKey;
+  onSelectNav: (nav: NavKey) => void;
   onQuickDemo: () => void;
   isDemoRunning?: boolean;
 }
@@ -22,7 +24,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Logo & Product Principle */}
         <div className="flex items-center gap-3">
           <div
-            onClick={() => onSelectNav('dashboard')}
+            onClick={() => onSelectNav('landing')}
             className="flex items-center gap-2 cursor-pointer"
           >
             <div className="p-1.5 rounded bg-sky-600/20 text-sky-400 border border-sky-500/30">
@@ -51,6 +53,18 @@ export const Header: React.FC<HeaderProps> = ({
           <nav className="flex items-center gap-1 text-xs font-mono">
             <button
               type="button"
+              onClick={() => onSelectNav('landing')}
+              className={`px-3 py-1.5 rounded transition-colors cursor-pointer ${
+                activeNav === 'landing'
+                  ? 'bg-soc-card text-sky-300 border border-soc-border font-medium'
+                  : 'text-soc-muted hover:text-slate-200'
+              }`}
+            >
+              Home
+            </button>
+
+            <button
+              type="button"
               onClick={() => onSelectNav('dashboard')}
               className={`px-3 py-1.5 rounded transition-colors cursor-pointer ${
                 activeNav === 'dashboard'
@@ -59,6 +73,18 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               Dashboard
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onSelectNav('learn')}
+              className={`px-3 py-1.5 rounded transition-colors cursor-pointer ${
+                activeNav === 'learn'
+                  ? 'bg-soc-card text-sky-300 border border-soc-border font-medium'
+                  : 'text-soc-muted hover:text-slate-200'
+              }`}
+            >
+              Learn
             </button>
 
             <button
