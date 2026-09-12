@@ -1,171 +1,286 @@
-# Autonomous Cloud IAM Least-Privilege Mitigator
+# PS10 — Autonomous Cloud IAM Least-Privilege Mitigator
 
-> **PS10 — Autonomous Cloud IAM Least-Privilege Mitigator (Phase 1 Foundation)**
+> **“A judge-ready, closed-loop autonomous IAM remediation console: Test proposed changes counterfactually, uncover hidden downstream dependencies, adapt dynamically, and enforce least privilege under a deterministic Security Kernel.”**
 
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-102%20passing-brightgreen.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](requirements.txt)
-[![FastAPI](https://img.shields.io/badge/FastAPI-1.0.0-009688.svg)](backend/api/main.py)
+[![FastAPI](https://img.shields.io/badge/FastAPI-3.0.0-009688.svg)](backend/api/main.py)
+[![React](https://img.shields.io/badge/React-18-61DAFB.svg)](frontend/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6.svg)](frontend/)
+[![Phase](https://img.shields.io/badge/phase-5%20judge--ready%20product-emerald.svg)](README.md)
 
 ---
 
-## 1. Problem Statement
+## 1. Product Principle & Innovation
 
-In enterprise cloud environments, IAM permissions accumulate over time and quickly become excessive. Developers and administrators routinely assign broad wildcards (e.g., `ec2:*`, `iam:*`, `dynamodb:*`) to accelerate development or prevent runtime outages. 
+Most cloud security tools blindly truncate any IAM permission that has zero logged invocations in a 30-day window. This breaks production systems whenever an infrequently invoked workflow (such as annual disaster recovery, year-end billing, or transitive encryption couplings) is called:
 
-Achieving true least privilege is notoriously difficult because revoking unlogged permissions risks breaking legitimate application workflows—especially when services rely on hidden, transitive infrastructure dependencies (such as an S3 bucket requiring KMS key decryption permissions for server-side encryption).
+$$\text{NOT OBSERVED} \neq \text{PROVEN UNNEEDED}$$
 
----
-
-## 2. Our Solution
-
-An autonomous, bounded closed-loop controller that coordinates IAM analysis, simulation, and remediation:
-
-$$\text{Observe} \longrightarrow \text{Reason} \longrightarrow \text{Propose} \longrightarrow \text{Simulate} \longrightarrow \text{Detect Failure} \longrightarrow \text{Replan} \longrightarrow \text{Apply} \longrightarrow \text{Verify}$$
-
-Rather than requiring manual trial-and-error, the agent:
-1. Audits role permissions and historical CloudTrail access patterns.
-2. Identifies unlogged candidate excessive privileges.
-3. Simulates proposed policy modifications prior to mutating state.
-4. Detects workflow regressions when a hidden dependency fails.
-5. Autonomously replans to retain required transitive permissions while removing excessive wildcards.
-6. Submits the safe policy revision to an independent deterministic verification layer.
-
----
-
-## 3. Important Differentiation
-
-> **Core Philosophy**: Existing cloud platforms already provide IAM analysis, security recommendations, and policy simulation. Our system does not reinvent these underlying primitives. Instead, our project focuses on the **autonomous orchestration** of these capabilities into a closed-loop remediation workflow with adaptive recovery, transitive dependency discovery, and verification.
-
----
-
-## 4. Phase 1 Status
-
-Phase 1 provides the clean, typed, modular foundation for parallel team development:
-
-- [x] **Agent Controller**: Bounded coordinator managing the agentic lifecycle and audit event stream.
-- [x] **Reasoner Abstraction**: Decoupled `Reasoner` Protocol with a deterministic Phase 1 implementation ready to be swapped with an LLM in Phase 2.
-- [x] **Tool Registry**: Safe execution layer hosting 10 typed IAM tools.
-- [x] **Simulated IAM Environment**: Local JSON-backed authorization reality featuring `PaymentServiceRole` and hidden S3 $\rightarrow$ KMS encryption dependencies.
-- [x] **Deterministic Policy Simulator**: Impact assessment engine identifying broken workflows, missing permissions, and broken dependency chains.
-- [x] **Independent Verification Layer**: Deterministic authority enforcing operational and security invariants.
-- [x] **In-Memory State Store & Audit Trail**: Structured event logs suitable for driving timeline visualizations.
-- [x] **CLI & FastAPI Endpoints**: Unified interface for terminal demonstrations and REST integrations.
-- [x] **Full Contract & Integration Test Suite**: 100% passing test coverage.
-
----
-
-## 5. Repository Structure
-
+**PS10 solves this through closed-loop autonomous reasoning backed by deterministic gates**:
 ```text
-iam-agent/
-│
-├── backend/
-│   ├── agent/
-│   │   ├── controller.py      # Core agent loop & audit event dispatch
-│   │   ├── reasoner.py        # Reasoner protocol & deterministic state machine
-│   │   └── __init__.py
-│   │
-│   ├── tools/
-│   │   ├── base.py            # BaseTool & ToolResult contracts
-│   │   ├── registry.py        # Central safe tool registry
-│   │   ├── iam_tools.py       # 10 deterministic IAM tools
-│   │   └── __init__.py
-│   │
-│   ├── state/
-│   │   ├── models.py          # AgentState & AuditEvent models
-│   │   ├── store.py           # StateStore protocol & InMemoryStateStore
-│   │   └── __init__.py
-│   │
-│   ├── environment/
-│   │   ├── loader.py          # IAMEnvironment repository & versioning
-│   │   ├── simulator.py       # Deterministic policy simulator
-│   │   ├── verifier.py        # Independent deterministic verification authority
-│   │   └── __init__.py
-│   │
-│   ├── models/
-│   │   ├── schemas.py         # Pydantic schemas (Role, Principal, Workflow, etc.)
-│   │   └── __init__.py
-│   │
-│   └── api/
-│       ├── main.py            # FastAPI REST endpoints
-│       └── __init__.py
-│
-├── data/
-│   └── environment.json       # Simulated IAM environment data
-│
-├── tests/
-│   ├── test_agent.py          # End-to-end integration & API tests
-│   ├── test_tools.py          # Unit tests for all 10 tools
-│   ├── test_simulator.py      # Simulation logic & dependency checks
-│   ├── test_verifier.py       # Invariant verification tests
-│   └── test_contracts.py      # Schema and protocol conformance tests
-│
-├── docs/
-│   ├── ARCHITECTURE.md        # Deep architectural design & data flow
-│   ├── PHASE1_CONTRACT.md     # Stable interface contract for team PRs
-│   └── CONTRIBUTING.md        # Branching model & module ownership rules
-│
-├── main.py                    # CLI entry point for deterministic demo
-├── requirements.txt           # Minimal project dependencies
-├── pytest.ini                 # Pytest configuration
-├── .env.example               # Environment template
-├── .gitignore                 # Clean repository hygiene rules
-└── README.md                  # Project overview & documentation
+Problem (Overprivileged Role)
+   ↓
+Agent investigates active permissions
+   ↓
+Finds candidate excessive access
+   ↓
+Tests candidate change via counterfactual simulation
+   ↓
+Simulation fails → reveals hidden dependency (e.g. S3 bucket SSE-KMS decryption)
+   ↓
+Agent autonomously replans & retains required coupling
+   ↓
+Re-simulation passes
+   ↓
+Security Kernel deterministically checks invariants & blast radius
+   ↓
+Mutation applied & verified by independent verifier
+   ↓
+Least privilege achieved without breaking production workflows
 ```
+
+**Core Architectural Tenet**: **AI proposes. Deterministic controls decide.**
 
 ---
 
-## 6. Quickstart
+## 2. Quickstart & One-Click Demo
 
-### Prerequisites
-Python 3.10 or higher.
-
-### Installation
+### Start the Console
 ```bash
-git clone https://github.com/Dinoman67/IAM-agent.git
-cd IAM-agent
-pip install -r requirements.txt
+./start.sh
 ```
+This automatically builds the React/TypeScript frontend (if not already compiled) and launches the unified FastAPI web server and SOC console at **`http://localhost:8000`**.
 
-### Running the CLI Demo
-Execute the deterministic scenario (`PaymentServiceRole` remediation):
-```bash
-python main.py
-```
-
-### Running the Test Suite
+### Run Test Suite (102 Tests Passing)
 ```bash
 pytest -q
 ```
 
-### Running the REST API Server
-```bash
-python -m uvicorn backend.api.main:app --reload
-```
+---
 
-#### API Endpoints
-- **Health Check**:
-  ```bash
-  curl -s http://localhost:8000/health
-  ```
-- **Trigger Mitigation**:
-  ```bash
-  curl -s -X POST http://localhost:8000/api/agent/run \
-    -H "Content-Type: application/json" \
-    -d '{"goal": "Reduce excessive permissions for PaymentServiceRole.", "role_id": "PaymentServiceRole"}'
-  ```
-- **Query Run by ID**:
-  ```bash
-  curl -s http://localhost:8000/api/agent/run/<run_id>
-  ```
+## 3. Judge Demo Flow (3-Minute Tour)
+
+To see the complete autonomous closed-loop remediation in under 30 seconds:
+
+1. **Open Console**: Navigate to `http://localhost:8000` in your browser.
+2. **Review Initial Posture**:
+   - Notice the **TARGET PRINCIPAL: `PaymentServiceRole`** (AWS Production).
+   - Currently granted **7 active permissions**, including 3 wildcard administrative grants (`ec2:*`, `iam:*`, `dynamodb:*`).
+   - Notice that `kms:Decrypt` has **0 CloudTrail access log events** in the sample window.
+3. **Launch Remediation**: Click **"Run IAM Assessment"** (or click **"Judge Demo"** in the top navigation).
+4. **Watch Closed-Loop Execution**:
+   - **Step 1 (Observe)**: The agent inspects `PaymentServiceRole` and identifies excessive grants.
+   - **Step 2 (Analyze)**: The agent marks unused permissions as candidates for removal.
+   - **Step 3 (Simulate)**: Counterfactual simulation tests workflow `payment_checkout`.
+   - **Step 4 (Sim Fail)**: Workflow `payment_checkout` fails because it lacks `kms:Decrypt`!
+   - **Step 5 (New Evidence)**: The agent discovers the hidden transitive dependency: `PaymentService → S3 → KMS` (the `payment-transactions` S3 bucket uses SSE-KMS customer-managed keys).
+   - **Step 6 (Replan)**: The agent autonomously adapts its plan to preserve `kms:Decrypt` while continuing to prune `ec2:*`, `iam:*`, and `dynamodb:*`.
+   - **Step 7 (Sim Passed)**: Re-simulation against all workflows passes with zero regression.
+   - **Step 8 (Security Kernel)**: The deterministic Security Kernel evaluates privilege expansion, blast radius (`LOW`), protected permissions, and optimistic concurrency $\rightarrow$ **PASS**.
+   - **Step 9 (Apply & Verify)**: The policy is updated to `v2`, and the independent verification layer confirms that all operational workflows remain fully functional.
+   - **Final Status**: **LEAST PRIVILEGE VERIFIED** (7 permissions reduced to 4, 1 preserved via dependency).
+
+### Additional Live Demonstration Scenarios
+Using the scenario picker on the Dashboard, judges can evaluate edge cases with real system events:
+- 🛡️ **Safety Block Demo**: The agent attempts to prune `iam:CreateRole`. The Security Kernel intercepts and vetoes the change (`BLOCKED`), preserving administrative safety.
+- 🔄 **Automated Rollback Demo**: A flawed policy is applied; post-apply verification fails, triggering immediate atomic rollback to `v1` with cryptographic confirmation.
+- ⚡ **Optimistic Concurrency Demo**: An out-of-band admin change moves the role from `v1` to `v2`. The agent detects stale state, refreshes baseline, replans, applies `v3`, and verifies.
+- 🌐 **Truthful GCP Parity Demo**: The agent evaluates GCP; capabilities inspection reveals no local simulator $\rightarrow$ safely escalates with `unsupported_capability` without hallucinating fake data.
+- 🚫 **Cross-Cloud Boundary Guard**: An Azure role assignment targeted at AWS is intercepted by the Security Kernel with `provider_mismatch`.
 
 ---
 
-## 7. Future Roadmap
+## 4. UI Architecture & Components
 
-With the Phase 1 architectural spine in place, future phases will introduce:
-- **Phase 2 — LLM Reasoner**: Plug in Gemini/Claude/GPT reasoners implementing the `Reasoner` protocol with structured reasoning.
-- **Phase 3 — IAM Intelligence & Risk Scoring**: Wildcard sensitivity metrics, permission usage frequency curves, and graph-based dependency resolution.
-- **Phase 4 — Frontend Visualizer**: Interactive React/Vite timeline dashboard powered by `/api/agent/run` audit events.
-- **Phase 5 — Safety & Human-in-the-Loop**: Approval gates for high-blast-radius roles, policy constraints, and automatic rollback triggers.
-- **Phase 6 — Multi-Cloud Adapters**: Live AWS, GCP, and Azure connectors sitting behind the standard tool interfaces.
+The frontend is built using **React 18, TypeScript, Tailwind CSS, and Lucide Icons**, organized into modular SOC components:
+
+```text
+frontend/
+├── src/
+│   ├── components/
+│   │   ├── dashboard/
+│   │   │   ├── MetricCards.tsx             # Real-time metrics (Runs, Reductions, Blocked, Rollbacks)
+│   │   │   ├── PrincipalSelector.tsx       # Cloud provider & scenario selection
+│   │   │   ├── ArchitectureDiagram.tsx     # Provider-agnostic IR architecture visual
+│   │   │   └── LandingHero.tsx             # Judge entry banner & differentiator callouts
+│   │   ├── remediation/
+│   │   │   ├── RemediationRunView.tsx      # Central interactive demo console
+│   │   │   └── ExecutionProgress.tsx       # 6-phase progression bar
+│   │   ├── timeline/
+│   │   │   ├── AgentTimeline.tsx           # Step-by-step audit trace with expandable payloads
+│   │   │   └── ReplanHighlight.tsx         # Prominent visual callout for agent adaptation
+│   │   ├── dependency/
+│   │   │   └── DependencyGraph.tsx         # Transitive cryptographic coupling node graph
+│   │   ├── policy/
+│   │   │   ├── PolicyDiffView.tsx          # Semantic Before vs. After diff (Removed, Preserved, Added)
+│   │   │   └── RawPolicyViewer.tsx         # Collapsible raw IAM JSON inspection
+│   │   ├── evidence/
+│   │   │   ├── EvidencePanel.tsx           # Multi-source evidence ledger
+│   │   │   └── UsageVsNeededBanner.tsx     # NOT_OBSERVED != PROVEN_UNNEEDED principle
+│   │   ├── security/
+│   │   │   ├── SecurityAssessmentCard.tsx  # Risk, Confidence, Blast Radius, Decision
+│   │   │   ├── SecurityKernelPanel.tsx     # Deterministic invariant checklist
+│   │   │   ├── BlockedStateView.tsx        # Non-error safety veto visual
+│   │   │   └── RollbackStateView.tsx       # 5-step post-apply rollback recovery visual
+│   │   ├── providers/
+│   │   │   └── ProviderCapabilitiesMatrix.tsx # Truthful AWS vs GCP vs Azure parity table
+│   │   ├── audit/
+│   │   │   └── AuditHistoryTable.tsx       # Cryptographic audit ledger
+│   │   └── layout/
+│   │       └── Header.tsx                  # Navigation & System Health badge
+│   ├── pages/
+│   │   ├── DashboardPage.tsx
+│   │   ├── RemediationPage.tsx
+│   │   ├── CapabilitiesPage.tsx
+│   │   └── AuditPage.tsx
+│   ├── services/
+│   │   └── api.ts                          # REST API client with error handling
+│   └── types/
+│       └── index.ts                        # Strict TypeScript models matching backend Pydantic schemas
+```
+
+---
+
+## 5. Security Model & Separation of Concerns
+
+```text
+               USER GOAL
+                  │
+                  ▼
+          ┌────────────────┐
+          │   LLM AGENT    │
+          │ Dynamic Reason │
+          └───────┬────────┘
+                  │ (Proposes candidate changes)
+                  ▼
+      ┌────────────────────────┐
+      │     Common IAM IR      │
+      └───────────┬────────────┘
+                  │
+   ┌──────────────┼──────────────┐
+   ▼              ▼              ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐
+│   AWS    │ │   GCP    │ │  Azure   │
+│ Adapter  │ │ Adapter  │ │ Adapter  │
+└────┬─────┘ └────┬─────┘ └────┬─────┘
+     │            │            │
+     └────────────┼────────────┘
+                  ▼
+      ┌────────────────────────┐
+      │  Deterministic Engine  │
+      │  Pre-Commit Simulator  │
+      │  Transitive Dependency │
+      └───────────┬────────────┘
+                  │
+                  ▼
+ ╔══════════════════════════════════╗
+ ║     SECURITY KERNEL GATEWAY      ║
+ ║  11 Explicit Invariants          ║
+ ║  7-Dimension Blast Radius        ║
+ ║  Privilege Expansion Guard       ║
+ ║  Evidence Sufficiency Gate       ║
+ ║  Policy Regression Test Suite    ║
+ ╚════════════════┬═════════════════╝
+                  │
+      ┌───────────┴───────────┐
+ALLOW │                       │ DENY / ESCALATE
+      ▼                       ▼
+┌─────────────────┐   ┌───────────────────┐
+│  Apply Mutation │   │ Escalate to Human │
+└────────┬────────┘   │ / Safety Halt     │
+         │            └───────────────────┘
+         ▼
+┌─────────────────────┐
+│  Extended Verifier  │
+│  Post-Apply Checks  │
+└──────────┬──────────┘
+           │
+   PASS    │    FAIL
+┌──────────┴───────────┐
+▼                      ▼
+┌──────────────┐ ┌─────────────────────┐
+│  COMPLETED   │ │  Automated Rollback │
+│  Audit Trail │ │  to Prior Version   │
+└──────────────┘ └─────────────────────┘
+```
+
+### Deterministic Invariants Enforced by Security Kernel
+1. `NO_PRIVILEGE_EXPANSION`: Zero action, wildcard, or resource expansion permitted.
+2. `NO_PROTECTED_PERMISSION_MUTATION`: Sensitive admin capabilities (`iam:*`, `iam:CreateRole`) cannot be pruned autonomously.
+3. `NO_PROTECTED_RESOURCE_EXPOSURE`: Sensitive tables and instances remain strictly isolated.
+4. `NO_CROSS_PROVIDER_MUTATION`: Prohibits applying cross-cloud foreign configurations.
+5. `NO_CROSS_TENANT_MUTATION`: Strict multi-tenant resource boundary isolation.
+6. `NO_STALE_STATE_MUTATION`: Optimistic concurrency check ensures fresh policy baseline.
+7. `NO_MUTATION_WITHOUT_EVIDENCE`: Pruning requires empirical logs, dependencies, or simulations.
+8. `NO_MUTATION_WITHOUT_SIMULATION`: Simulation mandatory when provider supports it.
+9. `NO_MUTATION_WITHOUT_PRE_APPLY_VERIFICATION`: Pre-apply regression suite must pass.
+10. `NO_COMPLETION_WITHOUT_VERIFICATION`: Autonomous run cannot complete without independent post-apply verification.
+11. `NO_UNAPPROVED_HIGH_RISK`: High or critical blast radius changes require human approval.
+
+---
+
+## 6. Multi-Cloud Provider Capabilities & Parity Reality
+
+PS10 maintains **truthful parity awareness** across clouds without faking unsupported operations:
+
+| Capability | AWS | GCP | Azure | Operational Description |
+|---|:---:|:---:|:---:|---|
+| **Principal & Role Inspection** | ✓ | ✓ | ✓ | Inspect active roles, policies, and identities |
+| **Common IR Translation** | ✓ | ✓ | ✓ | Bidirectional translation to vendor-neutral IR |
+| **Pre-Commit Counterfactual Simulation** | ✓ | — | — | Counterfactual testing before touching state |
+| **Provider-Aware Policy Validation** | ✓ | ✓ | ✓ | Syntax, statement, and structural checking |
+| **Atomic Version Rollback** | ✓ | — | — | Instant reversion to previous version |
+| **Transitive Coupling Discovery** | ✓ | — | — | Traces hidden couplings (e.g., SSE-KMS) |
+| **Post-Apply Independent Verification** | ✓ | ✓ | ✓ | Independent verification of operational state |
+
+---
+
+## 7. REST API Reference
+
+The FastAPI service exposes comprehensive endpoints for autonomous operations:
+
+- **`GET /health`**: Health check returning service status and version.
+- **`GET /api/principals`**: Returns all principals, roles, active permissions, workflows, and dependencies in the environment.
+- **`GET /api/providers`**: Returns capability matrices and limitations for AWS, GCP, and Azure.
+- **`GET /api/runs`**: Returns historical remediation run summaries and calculated metrics.
+- **`POST /api/agent/run`**: Triggers an autonomous remediation run with selectable scenarios:
+  ```json
+  {
+    "goal": "Make PaymentServiceRole least privilege without breaking required services.",
+    "role_id": "PaymentServiceRole",
+    "provider": "aws",
+    "scenario": "aws"
+  }
+  ```
+- **`GET /api/agent/run/{run_id}`**: Retrieves complete state, audit trail events, policy diffs, security decisions, and telemetry for a specific run.
+
+---
+
+## 8. Development & Testing Commands
+
+```bash
+# Run complete test suite (102 tests)
+pytest -q
+
+# Build frontend production bundle
+cd frontend && npm run build
+
+# Start unified server
+./start.sh
+
+# Run CLI demo runners
+python main.py --demo aws
+python main.py --demo safety-block
+python main.py --demo rollback
+python main.py --demo stale-state
+python main.py --demo unsupported-gcp
+python main.py --demo provider-mismatch
+```
+
+---
+
+## 9. Known Limitations
+
+1. **GCP & Azure Local Simulation**: The local simulator currently supports AWS-style action simulation. GCP and Azure adapters truthfully escalate when pre-commit simulation is requested, rather than hallucinating outcomes.
+2. **LLM Reasoner Offline Fallback**: In environments without a valid Gemini/OpenAI API key, the system automatically falls back to the deterministic reasoner, guaranteeing identical, predictable execution for demonstrations.

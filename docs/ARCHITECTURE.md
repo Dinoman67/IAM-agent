@@ -130,6 +130,18 @@ flowchart TD
   4. `excess_permissions_reduced`: Final permission count is strictly less than initial baseline count.
 
 ### 4.7. State Store (`backend/state/store.py`)
-- In-memory thread-safe implementation of `StateStore` protocol.
-- Tracks run ID, goal, role, tool calls, tool results, simulation failures, replans, and immutable audit logs.
-- Ready for SQLite drop-in replacement.
+- `StateStore` protocol with `InMemoryStateStore` (tests/ephemeral), `JSONFileStateStore` (`data/runs/`), `SQLiteStateStore` (`data/iam_runs.db`).
+- API default is SQLite via `STATE_STORE` env (`memory|json|sqlite`); tracks run ID, goal, role, tool calls, results, simulations, replans, audit logs.
+- Deep-copy serialization on save/retrieve to avoid reference mutation.
+
+---
+
+## 5. Phase 2–5 Addendum (Judge-Ready Product)
+
+This section corrects Phase-1-only drift noted in audit (Fix #6).
+
+- **Reasoner:** `DeterministicReasoner` (offline/judge default) + `LLMReasoner` (OpenAI/Gemini/Anthropic via `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`, `MOCK_LLM` fallback) in `backend/agent/reasoner.py`.
+- **Security Kernel Gateway** (`backend/security/kernel.py`): 11 invariants — `NO_PRIVILEGE_EXPANSION`, `NO_PROTECTED_PERMISSION_MUTATION`, `NO_PROTECTED_RESOURCE_EXPOSURE`, `NO_CROSS_PROVIDER_MUTATION`, `NO_CROSS_TENANT_MUTATION`, `NO_STALE_STATE_MUTATION`, `NO_MUTATION_WITHOUT_EVIDENCE`, `NO_MUTATION_WITHOUT_SIMULATION`, `NO_MUTATION_WITHOUT_PRE_APPLY_VERIFICATION`, `NO_COMPLETION_WITHOUT_VERIFICATION`, `NO_UNAPPROVED_HIGH_RISK` — plus 7-dimension blast-radius assessment, privilege-expansion guard, evidence gate, and regression suite.
+- **Shared scenarios** (`backend/scenarios.py`): single source of truth for `aws`, `safety_block`, `rollback`, `stale_state`, `unsupported_gcp`, `provider_mismatch` — consumed by both `main.py` CLI and `backend/api/main.py`.
+- **API:** `GET /health`, `GET /api/principals`, `GET /api/providers`, `GET /api/runs`, `POST /api/agent/run` (sync default, `async_run:true` for background + `GET /api/agent/run/{id}` polling), per-IP rate limit (`RATE_LIMIT_PER_MIN`, default 30/min), CORS allowlist via `ALLOWED_ORIGINS`.
+- **Frontend:** React 18 + TS + Tailwind served from `frontend/dist` by FastAPI with SPA fallback; dev proxy `5173 → 8000`.
