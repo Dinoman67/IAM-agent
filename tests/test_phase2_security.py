@@ -5,12 +5,14 @@ import pytest
 from backend.environment.loader import load_environment
 from backend.models.evidence import Evidence, EvidenceBundle, EvidenceSource, EvidenceState, EvidenceStrength
 from backend.models.iam import CommonAction, CommonPolicy, CommonResource, PolicyEffect
-from backend.providers.capabilities import AWS_CAPABILITIES, GCP_CAPABILITIES, RESTRICTED_MOCK_CAPABILITIES
+from backend.providers.capabilities import AWS_CAPABILITIES, GCP_CAPABILITIES, AZURE_CAPABILITIES, RESTRICTED_MOCK_CAPABILITIES
+from backend.providers.adapters import GCPProviderAdapter, AzureProviderAdapter
 from backend.security.analyzer import SecurityAnalyzer
 from backend.security.dependency import DependencyGraph
 from backend.security.diff import compute_policy_diff
 from backend.security.kernel import SecurityKernel
 from backend.security.verification import ExtendedPolicyVerifier
+from backend.tools.iam_tools import InspectPolicyTool, InspectPolicyArgs, AnalyzePolicyTool, AnalyzePolicyArgs
 
 
 def test_security_gate_denies_stale_state():
@@ -254,3 +256,79 @@ def test_extended_verifier_comprehensive_checks():
     assert res_mitigated.security_passed is True
     assert res_mitigated.structural_passed is True
     assert res_mitigated.should_rollback is False
+
+
+def test_gcp_and_azure_provider_adapters_capabilities():
+    """Verify GCP and Azure adapters expose honest capabilities and enforce boundaries."""
+    # GCP Adapter
+    gcp = GCPProviderAdapter()
+    assert gcp.capabilities.provider_name == "gcp"
+    assert gcp.capabilities.supports_simulation is False
+    assert gcp.capabilities.supports_rollback is False
+
+    with pytest.raises(NotImplementedError) as exc_gcp_sim:
+        gcp.simulate_policy("my-role", ["storage.objects.get"])
+    assert "simulation" in str(exc_gcp_sim.value).lower()
+
+    with pytest.raises(NotImplementedError) as exc_gcp_rb:
+        gcp.rollback_policy("my-role", "etag-1")
+    assert "rollback" in str(exc_gcp_rb.value).lower()
+
+    # Azure Adapter
+    azure = AzureProviderAdapter()
+    assert azure.capabilities.provider_name == "azure"
+    assert azure.capabilities.supports_simulation is False
+    assert azure.capabilities.supports_rollback is False
+
+    with pytest.raises(NotImplementedError) as exc_az_sim:
+        azure.simulate_policy("Contributor", ["Microsoft.Storage/read"])
+    assert "simulation" in str(exc_az_sim.value).lower()
+
+
+def test_inspect_policy_tool_returns_common_ir():
+    """InspectPolicyTool returns policy statements in canonical Common IR."""
+    env = load_environment()
+    tool = InspectPolicyTool(env)
+    res = tool.run(role_id="PaymentServiceRole")
+
+    assert res.success is True
+    assert res.data["id"] == "policy-PaymentServiceRole"
+    assert res.data["provider"] == "aws"
+    assert len(res.data["statements"]) >= 1
+    actions = [a["raw_action"] for a in res.data["statements"][0]["actions"]]
+    assert "s3:GetObject" in actions
+    assert "kms:Decrypt" in actions
+
+
+def test_analyze_policy_tool_returns_evidence_bundles():
+    """AnalyzePolicyTool generates structured evidence bundles per permission."""
+    env = load_environment()
+    tool = AnalyzePolicyTool(env)
+    res = tool.run(role_id="PaymentServiceRole")
+
+    assert res.success is True
+    bundles = res.data
+    assert "s3:GetObject" in bundles
+    assert bundles["s3:GetObject"]["state"] == "USED"
+    assert "kms:Decrypt" in bundles
+    assert bundles["kms:Decrypt"]["state"] == "DEPENDENCY_REQUIRED"
+    assert "ec2:*" in bundles
+    assert bundles["ec2:*"]["state"] == "NOT_OBSERVED"
+
+
+def test_protected_permission_retained_in_proposal_triggers_escalation():
+    """If candidate proposal retains admin wildcard (e.g. iam:*), Security Kernel escalates."""
+    env = load_environment()
+    kernel = SecurityKernel(env)
+
+    gate_result = kernel.evaluate_proposal(
+        role_id="PaymentServiceRole",
+        proposed_permissions=["s3:GetObject", "iam:*"],
+        planned_policy_version="v1",
+        confidence=0.95,
+        simulation_result={"success": True},
+    )
+
+    assert gate_result.decision in ["deny", "escalate"]
+    assert any("protected_permission" in c for c in gate_result.reason_codes)
+

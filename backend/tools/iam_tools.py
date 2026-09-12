@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 from backend.environment.loader import IAMEnvironment
 from backend.environment.simulator import PolicySimulator
 from backend.environment.verifier import PolicyVerifier
+from backend.models.iam import CommonPolicy
 from backend.providers.capabilities import AWS_CAPABILITIES, GCP_CAPABILITIES, AZURE_CAPABILITIES, ProviderCapabilities
+from backend.security.analyzer import SecurityAnalyzer
 from backend.security.diff import compute_policy_diff
 from backend.tools.base import BaseTool, ToolResult
 from backend.tools.registry import ToolRegistry
@@ -207,7 +209,7 @@ class GetServiceDependenciesTool(BaseTool):
 
 
 # =====================================================================
-# 7. simulate_policy / simulate_policy_change
+# 7. simulate_policy / simulate_policy_change / simulate_change
 # =====================================================================
 class SimulatePolicyArgs(BaseModel):
     role_id: str = Field(..., description="Target role ID")
@@ -216,6 +218,9 @@ class SimulatePolicyArgs(BaseModel):
     )
     remove_permissions: Optional[List[str]] = Field(
         default=None, description="Permissions proposed to be removed from current policy"
+    )
+    provider: Optional[str] = Field(
+        default="aws", description="Target cloud provider (aws, gcp, azure)"
     )
 
 
@@ -232,6 +237,20 @@ class SimulatePolicyTool(BaseTool):
         self.simulator = PolicySimulator(env)
 
     def _execute(self, args: SimulatePolicyArgs) -> ToolResult:
+        prov = (args.provider or "aws").lower()
+        if prov in ("gcp", "azure"):
+            return ToolResult(
+                success=False,
+                data=None,
+                error=f"UNSUPPORTED_CAPABILITY: Local {prov.upper()} simulation is not implemented.",
+                metadata={
+                    "unsupported_capability": True,
+                    "provider": prov,
+                    "operation": "simulate_change",
+                    "reason": f"Provider '{prov}' does not support local policy simulation in this environment.",
+                },
+            )
+
         role = self.env.get_role(args.role_id)
         if not role:
             return ToolResult(success=False, error=f"Role '{args.role_id}' not found.")
@@ -248,13 +267,18 @@ class SimulatePolicyTool(BaseTool):
         return ToolResult(
             success=True,
             data=sim_result.model_dump(),
-            metadata={"simulation_success": sim_result.success, "evidence_id": sim_result.evidence_id},
+            metadata={"simulation_success": sim_result.success, "evidence_id": sim_result.evidence_id, "provider": prov},
         )
 
 
 class SimulatePolicyChangeTool(SimulatePolicyTool):
     name = "simulate_policy_change"
     description = "Run counterfactual simulation on candidate permission changes against production workflows."
+
+
+class SimulateChangeTool(SimulatePolicyTool):
+    name = "simulate_change"
+    description = "Provider-neutral pre-commit simulation of candidate policy changes against application workflows."
 
 
 # =====================================================================
@@ -319,8 +343,13 @@ class ApplyPolicyChangeTool(BaseTool):
             return ToolResult(success=False, error=str(e))
 
 
+class ApplyChangeTool(ApplyPolicyChangeTool):
+    name = "apply_change"
+    description = "Provider-neutral policy modification tool applying candidate policy changes."
+
+
 # =====================================================================
-# 9. verify_required_access
+# 9. verify_required_access / verify_change
 # =====================================================================
 class VerifyRequiredAccessArgs(BaseModel):
     role_id: str = Field(..., description="Target role ID")
@@ -347,8 +376,13 @@ class VerifyRequiredAccessTool(BaseTool):
         )
 
 
+class VerifyChangeTool(VerifyRequiredAccessTool):
+    name = "verify_change"
+    description = "Provider-neutral post-remediation verification checking workflows and security invariants."
+
+
 # =====================================================================
-# 10. rollback_policy / rollback_policy_change
+# 10. rollback_policy / rollback_policy_change / rollback_change
 # =====================================================================
 class RollbackPolicyArgs(BaseModel):
     role_id: str = Field(..., description="Target role ID")
@@ -379,6 +413,11 @@ class RollbackPolicyTool(BaseTool):
 class RollbackPolicyChangeTool(RollbackPolicyTool):
     name = "rollback_policy_change"
     description = "Rollback active role policy to designated stable revision."
+
+
+class RollbackChangeTool(RollbackPolicyTool):
+    name = "rollback_change"
+    description = "Provider-neutral rollback tool restoring a designated stable policy revision."
 
 
 # =====================================================================
@@ -522,6 +561,154 @@ class CheckSecurityInvariantsTool(BaseTool):
         )
 
 
+# =====================================================================
+# 14. inspect_policy
+# =====================================================================
+class InspectPolicyArgs(BaseModel):
+    role_id: Optional[str] = Field(default=None, description="Role ID to extract policy from")
+    policy_id: Optional[str] = Field(default=None, description="Direct policy ID")
+
+
+class InspectPolicyTool(BaseTool):
+    name = "inspect_policy"
+    description = "Inspect an IAM policy document and statements in provider-neutral Common IR."
+    args_schema = InspectPolicyArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: InspectPolicyArgs) -> ToolResult:
+        role_id = args.role_id
+        if not role_id and not args.policy_id:
+            role_id = "PaymentServiceRole"
+        elif not role_id and args.policy_id:
+            role_id = args.policy_id.replace("policy-", "").replace("Policy", "")
+
+        role = self.env.get_role(role_id)
+        if not role:
+            return ToolResult(success=False, error=f"Role or policy for '{role_id}' not found.")
+
+        common_policy = CommonPolicy.from_permissions_list(
+            policy_id=f"policy-{role.id}",
+            name=f"{role.name}Policy",
+            permissions=role.active_permissions(),
+            version=role.current_version,
+            provider="aws",
+        )
+        return ToolResult(
+            success=True,
+            data=common_policy.model_dump(),
+            metadata={"role_id": role.id, "version": role.current_version},
+        )
+
+
+# =====================================================================
+# 15. analyze_policy
+# =====================================================================
+class AnalyzePolicyArgs(BaseModel):
+    role_id: str = Field(..., description="Target role ID to analyze permissions and build structured evidence bundles")
+
+
+class AnalyzePolicyTool(BaseTool):
+    name = "analyze_policy"
+    description = (
+        "Deterministically analyze granted permissions against access history, transitive dependencies, "
+        "and security rules, producing structured EvidenceBundles."
+    )
+    args_schema = AnalyzePolicyArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+        self.analyzer = SecurityAnalyzer(env)
+
+    def _execute(self, args: AnalyzePolicyArgs) -> ToolResult:
+        role = self.env.get_role(args.role_id)
+        if not role:
+            return ToolResult(success=False, error=f"Role '{args.role_id}' not found.")
+
+        bundles = self.analyzer.analyze_role(args.role_id)
+        serialized = {perm: bundle.model_dump() for perm, bundle in bundles.items()}
+        return ToolResult(
+            success=True,
+            data=serialized,
+            metadata={"role_id": args.role_id, "analyzed_permissions": list(bundles.keys())},
+        )
+
+
+class AnalyzePermissionsTool(AnalyzePolicyTool):
+    name = "analyze_permissions"
+    description = "Provider-neutral permission analysis tool building structured evidence bundles."
+
+
+# =====================================================================
+# 16. validate_change
+# =====================================================================
+class ValidateChangeArgs(BaseModel):
+    role_id: Optional[str] = Field(default=None, description="Target role ID")
+    proposed_permissions: Optional[List[str]] = Field(default=None, description="Proposed permissions")
+    provider: Optional[str] = Field(default="aws", description="Cloud provider: aws, gcp, azure")
+    policy_document: Optional[Dict[str, Any]] = Field(default=None, description="Explicit raw policy document")
+
+
+class ValidateChangeTool(BaseTool):
+    name = "validate_change"
+    description = "Validate candidate policy changes against provider-specific syntax, schema, and security invariants."
+    args_schema = ValidateChangeArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: ValidateChangeArgs) -> ToolResult:
+        from backend.security.validator import (
+            validate_aws_policy,
+            validate_gcp_binding,
+            validate_azure_assignment,
+        )
+        prov = (args.provider or "aws").lower()
+        if prov == "aws":
+            if args.policy_document:
+                res = validate_aws_policy(args.policy_document)
+            else:
+                perms = args.proposed_permissions or []
+                policy = CommonPolicy.from_permissions_list(
+                    policy_id=args.role_id or "candidate",
+                    name="CandidatePolicy",
+                    permissions=perms,
+                    provider="aws",
+                )
+                res = validate_aws_policy(policy)
+        elif prov == "gcp":
+            res = validate_gcp_binding(
+                args.policy_document
+                or {
+                    "role": f"roles/{args.role_id or 'customRole'}",
+                    "members": ["serviceAccount:sa@proj.iam.gserviceaccount.com"],
+                }
+            )
+        elif prov == "azure":
+            res = validate_azure_assignment(
+                args.policy_document
+                or {
+                    "properties": {
+                        "roleDefinitionId": args.role_id or "/providers/Microsoft.Authorization/roleDefinitions/def-1",
+                        "principalId": "sp-id",
+                        "scope": "/subscriptions/sub-1",
+                    }
+                }
+            )
+        else:
+            return ToolResult(success=False, error=f"Unknown provider: {prov}")
+
+        return ToolResult(
+            success=res.is_valid,
+            data=res.model_dump(),
+            metadata={"is_valid": res.is_valid, "provider": prov, "error_count": len(res.errors)},
+        )
+
+
 def create_default_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     """Factory creating and registering the 10 core deterministic IAM tools (Phase 1 contract)."""
     registry = ToolRegistry()
@@ -539,18 +726,29 @@ def create_default_tool_registry(env: IAMEnvironment) -> ToolRegistry:
 
 
 def create_extended_tool_registry(env: IAMEnvironment) -> ToolRegistry:
-    """Factory creating core IAM tools plus Phase 2 extensions and aliases."""
+    """Factory creating core IAM tools plus Phase 2 and Phase 3 provider-neutral tools."""
     registry = create_default_tool_registry(env)
 
     # Phase 2 extension tools
     registry.register(GetProviderCapabilitiesTool(env))
     registry.register(ComputePolicyDiffTool(env))
     registry.register(CheckSecurityInvariantsTool(env))
+    registry.register(InspectPolicyTool(env))
+    registry.register(AnalyzePolicyTool(env))
 
-    # Aliases
+    # Phase 2 Aliases
     registry.register(InspectPrincipalTool(env))
     registry.register(InspectRoleTool(env))
     registry.register(SimulatePolicyChangeTool(env))
     registry.register(RollbackPolicyChangeTool(env))
 
+    # Phase 3 Provider-Neutral Canonical Tools
+    registry.register(ValidateChangeTool(env))
+    registry.register(SimulateChangeTool(env))
+    registry.register(VerifyChangeTool(env))
+    registry.register(ApplyChangeTool(env))
+    registry.register(RollbackChangeTool(env))
+    registry.register(AnalyzePermissionsTool(env))
+
     return registry
+

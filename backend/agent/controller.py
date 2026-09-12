@@ -8,7 +8,12 @@ from backend.agent.budgets import AgentBudget, BudgetTracker
 from backend.agent.planner import AgentPlan
 from backend.agent.reasoner import Reasoner
 from backend.environment.loader import IAMEnvironment
-from backend.providers.capabilities import AWS_CAPABILITIES, ProviderCapabilities
+from backend.providers.capabilities import (
+    AWS_CAPABILITIES,
+    AZURE_CAPABILITIES,
+    GCP_CAPABILITIES,
+    ProviderCapabilities,
+)
 from backend.security.diff import compute_policy_diff
 from backend.security.kernel import SecurityKernel
 from backend.security.verification import ExtendedPolicyVerifier
@@ -30,13 +35,24 @@ class AgentController:
         security_kernel: Optional[SecurityKernel] = None,
         capabilities: Optional[ProviderCapabilities] = None,
         environment: Optional[IAMEnvironment] = None,
+        provider: str = "aws",
     ) -> None:
         self.reasoner = reasoner
         self.tools = tool_registry
         self.state_store = state_store or InMemoryStateStore()
         self.event_callback = event_callback
         self.budget = budget or AgentBudget()
-        self.capabilities = capabilities or AWS_CAPABILITIES
+        self.provider = provider.lower()
+
+        if capabilities:
+            self.capabilities = capabilities
+        elif self.provider == "gcp":
+            self.capabilities = GCP_CAPABILITIES
+        elif self.provider == "azure":
+            self.capabilities = AZURE_CAPABILITIES
+        else:
+            self.capabilities = AWS_CAPABILITIES
+
         self.env = environment
 
         # Security Kernel authority
@@ -67,6 +83,8 @@ class AgentController:
         reason: Optional[str] = None,
         confidence: Optional[float] = None,
         evidence_refs: Optional[List[str]] = None,
+        provider: Optional[str] = None,
+        operation: Optional[str] = None,
     ) -> AuditEvent:
         event = state.record_event(
             event_type=event_type,
@@ -81,6 +99,8 @@ class AgentController:
             reason=reason,
             confidence=confidence,
             evidence_refs=evidence_refs or [],
+            provider=provider or self.capabilities.provider_name,
+            operation=operation or tool or event_type,
         )
         if self.event_callback:
             self.event_callback(event)
@@ -91,8 +111,22 @@ class AgentController:
         goal: str,
         role_id: Optional[str] = None,
         max_steps: int = 25,
+        provider: Optional[str] = None,
     ) -> AgentState:
         """Executes the closed-loop autonomous IAM remediation workflow."""
+        if provider:
+            self.provider = provider.lower()
+            if self.provider == "gcp":
+                self.capabilities = GCP_CAPABILITIES
+            elif self.provider == "azure":
+                self.capabilities = AZURE_CAPABILITIES
+            else:
+                self.capabilities = AWS_CAPABILITIES
+            if self.env and self.security_kernel is None:
+                self.security_kernel = SecurityKernel(self.env, capabilities=self.capabilities)
+            if self.env and self.extended_verifier is None:
+                self.extended_verifier = ExtendedPolicyVerifier(self.env, capabilities=self.capabilities)
+
         # Initialize budget tracking
         budget_tracker = BudgetTracker(self.budget)
 
@@ -109,6 +143,7 @@ class AgentController:
         state = AgentState(
             goal=goal,
             current_role=role_id,
+            provider=self.capabilities.provider_name,
             current_phase="OBSERVING",
             current_plan=plan,
         )
@@ -185,17 +220,27 @@ class AgentController:
                 verification = state.verification_result or {}
                 if verification.get("passed", False):
                     state.current_phase = "COMPLETED"
-                    state.stop_reason = "verified_success"
+                    has_applied_changes = any(
+                        c.get("tool_name") in ["apply_policy_change", "apply_policy"]
+                        for c in state.tool_calls
+                    )
+                    # Check if changes were actually needed or if role was already least-privilege
+                    if not has_applied_changes and not state.candidate_policy_changes:
+                        state.stop_reason = "safe_no_change_required"
+                    else:
+                        state.stop_reason = "verified_success"
+
                     plan.mark_verified()
                     state.final_outcome = {
                         "status": "success",
+                        "stop_reason": state.stop_reason,
                         "message": decision.reason or decision.thought,
                         "details": decision.metadata,
                     }
                     self._emit_event(
                         state=state,
                         event_type="final_outcome",
-                        summary="Remediation cycle completed successfully.",
+                        summary=f"Remediation cycle completed: {state.stop_reason}.",
                         relevant_ids={"role_id": state.current_role or ""},
                         details=state.final_outcome,
                         step_number=step_count,
@@ -209,6 +254,7 @@ class AgentController:
                     plan.mark_failed("Verification checks failed")
                     state.final_outcome = {
                         "status": "verification_failed",
+                        "stop_reason": "unrecoverable_failure",
                         "message": f"Verification checks did not pass: {verification.get('details')}",
                     }
                     self._emit_event(
@@ -224,16 +270,21 @@ class AgentController:
 
             elif decision.decision_type == "escalate":
                 state.current_phase = "FAILED"
-                state.stop_reason = "human_approval_required"
+                has_unsupported_cap = (
+                    "unsupported_capability" in (decision.reason or "").lower()
+                    or "unsupported_capability" in str(decision.metadata).lower()
+                )
+                state.stop_reason = "unsupported_capability" if has_unsupported_cap else "human_approval_required"
                 state.final_outcome = {
                     "status": "escalated",
+                    "stop_reason": state.stop_reason,
                     "message": decision.reason,
                     "details": decision.metadata,
                 }
                 self._emit_event(
                     state=state,
                     event_type="escalate",
-                    summary=f"Remediation escalated for human approval: {decision.reason}",
+                    summary=f"Remediation escalated ({state.stop_reason}): {decision.reason}",
                     relevant_ids={"role_id": state.current_role or ""},
                     details=state.final_outcome,
                     step_number=step_count,
@@ -245,17 +296,22 @@ class AgentController:
 
             elif decision.decision_type == "abort":
                 state.current_phase = "FAILED"
-                state.stop_reason = "unrecoverable_failure"
+                has_unsupported_cap = (
+                    "unsupported_capability" in (decision.reason or "").lower()
+                    or "unsupported_capability" in str(decision.metadata).lower()
+                )
+                state.stop_reason = "unsupported_capability" if has_unsupported_cap else "unrecoverable_failure"
                 plan.mark_failed(decision.reason)
                 state.final_outcome = {
                     "status": "failed",
+                    "stop_reason": state.stop_reason,
                     "message": decision.reason or decision.thought,
                     "details": decision.metadata,
                 }
                 self._emit_event(
                     state=state,
                     event_type="final_outcome",
-                    summary=f"Remediation cycle halted with failure: {decision.reason or decision.thought}",
+                    summary=f"Remediation cycle halted with failure ({state.stop_reason}): {decision.reason or decision.thought}",
                     relevant_ids={"role_id": state.current_role or ""},
                     details=state.final_outcome,
                     step_number=step_count,
@@ -281,14 +337,43 @@ class AgentController:
 
                 # Normalize aliases
                 canonical_tool_name = tool_name
-                if tool_name == "inspect_role":
+                if tool_name in ("inspect_role", "get_role"):
                     canonical_tool_name = "get_role"
-                elif tool_name == "simulate_policy_change":
+                elif tool_name in ("simulate_policy_change", "simulate_change", "simulate_policy"):
                     canonical_tool_name = "simulate_policy"
-                elif tool_name == "rollback_policy_change":
+                elif tool_name in ("rollback_policy_change", "rollback_change", "rollback_policy"):
                     canonical_tool_name = "rollback_policy"
-                elif tool_name == "inspect_principal":
+                elif tool_name in ("inspect_principal", "get_principal"):
                     canonical_tool_name = "get_principal"
+                elif tool_name in ("apply_policy_change", "apply_change"):
+                    canonical_tool_name = "apply_policy_change"
+                elif tool_name in ("verify_required_access", "verify_change"):
+                    canonical_tool_name = "verify_required_access"
+                elif tool_name in ("analyze_policy", "analyze_permissions"):
+                    canonical_tool_name = "analyze_policy"
+
+                # Capability Negotiation Guard
+                cap_status = self.capabilities.check_capability(canonical_tool_name)
+                if not cap_status.supported:
+                    state.current_phase = "FAILED"
+                    state.stop_reason = "unsupported_capability"
+                    state.final_outcome = {
+                        "status": "escalated",
+                        "stop_reason": "unsupported_capability",
+                        "message": f"Operation '{tool_name}' unsupported by provider '{self.capabilities.provider_name}': {cap_status.reason}",
+                        "details": cap_status.model_dump(),
+                    }
+                    self._emit_event(
+                        state=state,
+                        event_type="escalate",
+                        summary=f"Operation '{tool_name}' unsupported by provider '{self.capabilities.provider_name}': {cap_status.reason}",
+                        relevant_ids={"role_id": state.current_role or "", "tool": tool_name},
+                        details=state.final_outcome,
+                        step_number=step_count,
+                        actor="controller",
+                        reason=cap_status.reason,
+                    )
+                    break
 
                 # Lifecycle event tagging
                 meta_phase = decision.metadata.get("candidate_phase")
@@ -403,6 +488,7 @@ class AgentController:
                         confidence=decision.confidence,
                         simulation_result=last_sim,
                         risk_level=plan.risk_level,
+                        provider=self.capabilities.provider_name,
                     )
 
                     if gate_result.decision == "deny":
@@ -417,6 +503,41 @@ class AgentController:
                             actor="security_kernel",
                             reason=f"Authoritative denial: {gate_result.reason_codes}",
                         )
+
+                        # Provider mismatch check
+                        if any("provider_mismatch" in c for c in gate_result.reason_codes):
+                            state.current_phase = "FAILED"
+                            state.stop_reason = "provider_mismatch"
+                            state.final_outcome = {
+                                "status": "failed",
+                                "stop_reason": "provider_mismatch",
+                                "message": f"Security Kernel blocked cross-provider mutation: {gate_result.reason_codes}",
+                                "details": gate_result.model_dump(),
+                            }
+                            self._emit_event(
+                                state=state,
+                                event_type="provider_mismatch",
+                                summary=f"Security Kernel blocked provider mismatch: {gate_result.reason_codes}",
+                                relevant_ids={"role_id": state.current_role or ""},
+                                details=gate_result.model_dump(),
+                                step_number=step_count,
+                                actor="security_kernel",
+                                reason="Provider mismatch detected between proposed policy and target provider",
+                            )
+                            break
+
+                        # Privilege expansion check
+                        if any("unauthorized_privilege_expansion" in c for c in gate_result.reason_codes):
+                            state.current_phase = "FAILED"
+                            state.stop_reason = "privilege_expansion_blocked"
+                            state.final_outcome = {
+                                "status": "failed",
+                                "stop_reason": "privilege_expansion_blocked",
+                                "message": f"Security Kernel blocked unauthorized privilege expansion: {gate_result.reason_codes}",
+                                "details": gate_result.model_dump(),
+                            }
+                            break
+
                         # If stale state was the issue, refresh state and replan
                         if "stale_state_detected" in gate_result.reason_codes:
                             state.current_phase = "REPLANNING"
@@ -425,20 +546,36 @@ class AgentController:
                             if role_res.success:
                                 state.observed_evidence["role"] = role_res.data
                                 planned_policy_version = role_res.data.get("current_version", "v1")
-                        continue
+                                budget_tracker.record_replan()
+                                plan.revise(
+                                    replan_reason=f"Stale state detected: policy version moved to {planned_policy_version}"
+                                )
+                                self._emit_event(
+                                    state=state,
+                                    event_type="adapt",
+                                    summary=f"Stale state detected: refreshed active policy version to {planned_policy_version} and initiating replan.",
+                                    relevant_ids={"role_id": state.current_role or "", "version": planned_policy_version},
+                                    details={"stale_state": True, "refreshed_version": planned_policy_version},
+                                    step_number=step_count,
+                                    actor="controller",
+                                    reason="Optimistic concurrency protection triggered refresh and replan",
+                                )
+                            continue
 
                     elif gate_result.decision == "escalate":
                         state.current_phase = "FAILED"
-                        state.stop_reason = "human_approval_required"
+                        has_unsupported_cap = any("unsupported_capability" in c for c in gate_result.reason_codes)
+                        state.stop_reason = "unsupported_capability" if has_unsupported_cap else "human_approval_required"
                         state.final_outcome = {
                             "status": "escalated",
+                            "stop_reason": state.stop_reason,
                             "message": f"Security Kernel requires human approval: {gate_result.reason_codes}",
                             "details": gate_result.model_dump(),
                         }
                         self._emit_event(
                             state=state,
                             event_type="escalate",
-                            summary=f"Security Kernel escalated for human approval: {gate_result.reason_codes}",
+                            summary=f"Security Kernel escalated ({state.stop_reason}): {gate_result.reason_codes}",
                             relevant_ids={"role_id": state.current_role or ""},
                             details=state.final_outcome,
                             step_number=step_count,
@@ -600,6 +737,16 @@ class AgentController:
                             step_number=step_count,
                             actor="agent",
                         )
+                    elif canonical_tool_name == "inspect_policy":
+                        state.observed_evidence["policy"] = result.data
+                    elif canonical_tool_name == "analyze_policy":
+                        state.observed_evidence["analysis"] = result.data
+                    elif canonical_tool_name == "check_security_invariants":
+                        state.observed_evidence["invariants"] = result.data
+                    elif canonical_tool_name == "compute_policy_diff":
+                        state.observed_evidence["diff_preview"] = result.data
+                    elif canonical_tool_name == "get_provider_capabilities":
+                        state.observed_evidence["provider_capabilities"] = result.data
 
         if step_count >= max_steps and state.current_phase not in ["COMPLETED", "FAILED"]:
             state.current_phase = "FAILED"
