@@ -14,8 +14,11 @@ from backend.providers.capabilities import (
     GCP_CAPABILITIES,
     ProviderCapabilities,
 )
+from backend.security.analyzer import SecurityAnalyzer
 from backend.security.diff import compute_policy_diff
+from backend.security.escalation import EscalationReason
 from backend.security.kernel import SecurityKernel
+from backend.security.policy_config import DEFAULT_SECURITY_POLICY_CONFIG, SecurityPolicyConfig
 from backend.security.verification import ExtendedPolicyVerifier
 from backend.state.models import AgentState, AuditEvent
 from backend.state.store import InMemoryStateStore, StateStore
@@ -36,6 +39,7 @@ class AgentController:
         capabilities: Optional[ProviderCapabilities] = None,
         environment: Optional[IAMEnvironment] = None,
         provider: str = "aws",
+        config: Optional[SecurityPolicyConfig] = None,
     ) -> None:
         self.reasoner = reasoner
         self.tools = tool_registry
@@ -54,12 +58,19 @@ class AgentController:
             self.capabilities = AWS_CAPABILITIES
 
         self.env = environment
+        self.config = config or (
+            self.security_kernel.config
+            if security_kernel and hasattr(security_kernel, "config")
+            else DEFAULT_SECURITY_POLICY_CONFIG
+        )
 
         # Security Kernel authority
         if security_kernel:
             self.security_kernel = security_kernel
         elif self.env:
-            self.security_kernel = SecurityKernel(self.env, capabilities=self.capabilities)
+            self.security_kernel = SecurityKernel(
+                self.env, capabilities=self.capabilities, config=self.config
+            )
         else:
             self.security_kernel = None
 
@@ -149,6 +160,8 @@ class AgentController:
         )
 
         planned_policy_version = "v1"
+        rollback_attempts = 0
+        failed_actions: Dict[str, int] = {}
 
         self._emit_event(
             state=state,
@@ -481,6 +494,15 @@ class AgentController:
                     else:
                         proposed = current_role_active
 
+                    # Build or retrieve evidence bundles for evidence sufficiency check
+                    evidence_bundles = None
+                    if self.env:
+                        analyzer = SecurityAnalyzer(self.env)
+                        evidence_bundles = analyzer.analyze_role(
+                            state.current_role or "PaymentServiceRole",
+                            simulation_results=state.simulation_results,
+                        )
+
                     gate_result = self.security_kernel.evaluate_proposal(
                         role_id=state.current_role or "PaymentServiceRole",
                         proposed_permissions=proposed,
@@ -489,6 +511,20 @@ class AgentController:
                         simulation_result=last_sim,
                         risk_level=plan.risk_level,
                         provider=self.capabilities.provider_name,
+                        evidence_bundles=evidence_bundles,
+                    )
+
+                    # Emit security gate evaluated event
+                    self._emit_event(
+                        state=state,
+                        event_type="security_check",
+                        summary=f"Security Kernel evaluated proposal: decision={gate_result.decision.upper()} (blast radius: {gate_result.blast_radius})",
+                        relevant_ids={"role_id": state.current_role or ""},
+                        details=gate_result.model_dump(),
+                        step_number=step_count,
+                        actor="security_kernel",
+                        reason=gate_result.reason,
+                        confidence=gate_result.confidence,
                     )
 
                     if gate_result.decision == "deny":
@@ -538,6 +574,18 @@ class AgentController:
                             }
                             break
 
+                        # Protected permission mutation check (Safety Block)
+                        if any("protected_permission_removed" in c for c in gate_result.reason_codes):
+                            state.current_phase = "FAILED"
+                            state.stop_reason = "security_block"
+                            state.final_outcome = {
+                                "status": "failed",
+                                "stop_reason": "security_block",
+                                "message": f"Security Kernel blocked protected permission removal: {gate_result.reason_codes}",
+                                "details": gate_result.model_dump(),
+                            }
+                            break
+
                         # If stale state was the issue, refresh state and replan
                         if "stale_state_detected" in gate_result.reason_codes:
                             state.current_phase = "REPLANNING"
@@ -565,7 +613,19 @@ class AgentController:
                     elif gate_result.decision == "escalate":
                         state.current_phase = "FAILED"
                         has_unsupported_cap = any("unsupported_capability" in c for c in gate_result.reason_codes)
-                        state.stop_reason = "unsupported_capability" if has_unsupported_cap else "human_approval_required"
+                        has_prot_perm = any("protected_permission" in c for c in gate_result.reason_codes)
+                        has_insuf_ev = any("insufficient_evidence" in c for c in gate_result.reason_codes)
+                        has_insuf_conf = any("insufficient_confidence" in c for c in gate_result.reason_codes)
+
+                        if has_unsupported_cap:
+                            state.stop_reason = "unsupported_capability"
+                        elif has_prot_perm:
+                            state.stop_reason = "human_approval_required"
+                        elif has_insuf_ev or has_insuf_conf:
+                            state.stop_reason = "insufficient_evidence"
+                        else:
+                            state.stop_reason = gate_result.escalation_reason or "human_approval_required"
+
                         state.final_outcome = {
                             "status": "escalated",
                             "stop_reason": state.stop_reason,
@@ -580,6 +640,7 @@ class AgentController:
                             details=state.final_outcome,
                             step_number=step_count,
                             actor="security_kernel",
+                            reason=gate_result.reason,
                         )
                         break
 
@@ -606,6 +667,31 @@ class AgentController:
                     tool=tool_name,
                     result={"success": result.success, "error": result.error},
                 )
+
+                # Check for repeated tool execution failure (Loop Prevention)
+                if not result.success:
+                    action_key = f"{canonical_tool_name}:{sorted(str(tool_args.items()))}"
+                    failed_actions[action_key] = failed_actions.get(action_key, 0) + 1
+                    if failed_actions[action_key] >= self.config.max_failed_action_repeats:
+                        state.current_phase = "FAILED"
+                        state.stop_reason = "repeated_failed_actions"
+                        state.final_outcome = {
+                            "status": "escalated",
+                            "stop_reason": "repeated_failed_actions",
+                            "message": f"Tool '{tool_name}' failed repeatedly ({failed_actions[action_key]} times) with identical arguments. Autonomy halted.",
+                            "details": {"tool": tool_name, "args": tool_args, "error": result.error},
+                        }
+                        self._emit_event(
+                            state=state,
+                            event_type="escalate",
+                            summary=f"Repeated action failure loop detected for tool '{tool_name}'. Autonomy halted safely.",
+                            relevant_ids={"role_id": state.current_role or "", "tool": tool_name},
+                            details=state.final_outcome,
+                            step_number=step_count,
+                            actor="controller",
+                            reason="Loop prevention triggered after repeated failed invocations of identical action",
+                        )
+                        break
 
                 # Update structured state evidence based on tool output
                 if result.success:
@@ -641,6 +727,28 @@ class AgentController:
                         state.simulation_results.append(sim_data)
                         if not sim_data.get("success", True):
                             state.failures.append(sim_data)
+                            sim_key = f"sim:{sorted(tool_args.get('proposed_permissions', []))}"
+                            failed_actions[sim_key] = failed_actions.get(sim_key, 0) + 1
+                            if failed_actions[sim_key] >= self.config.max_failed_action_repeats:
+                                state.current_phase = "FAILED"
+                                state.stop_reason = "repeated_failed_actions"
+                                state.final_outcome = {
+                                    "status": "escalated",
+                                    "stop_reason": "repeated_failed_actions",
+                                    "message": f"Simulation failed repeatedly ({failed_actions[sim_key]} times) with identical proposed permissions.",
+                                    "details": sim_data,
+                                }
+                                self._emit_event(
+                                    state=state,
+                                    event_type="escalate",
+                                    summary="Repeated simulation failure loop detected without progress. Autonomy halted safely.",
+                                    relevant_ids={"role_id": state.current_role or ""},
+                                    details=state.final_outcome,
+                                    step_number=step_count,
+                                    actor="controller",
+                                    reason="Repeated simulation failure without architectural progress",
+                                )
+                                break
                             self._emit_event(
                                 state=state,
                                 event_type="simulation_failed",
@@ -692,14 +800,28 @@ class AgentController:
                         )
                         state.policy_diff = diff.model_dump()
 
-                    elif canonical_tool_name == "verify_required_access":
-                        verify_data = result.data or {}
+                    elif canonical_tool_name in ["verify_required_access", "verify_change"]:
+                        if self.extended_verifier:
+                            candidate_perms = None
+                            if state.replans:
+                                candidate_perms = state.replans[-1].get("proposed_permissions")
+                            elif state.candidate_policy_changes:
+                                candidate_perms = state.candidate_policy_changes[-1].get("proposed_permissions")
+                            ext_ver_res = self.extended_verifier.verify_remediation(
+                                role_id=state.current_role or "PaymentServiceRole",
+                                expected_permissions=candidate_perms,
+                                provider=self.capabilities.provider_name,
+                            )
+                            verify_data = ext_ver_res.model_dump()
+                        else:
+                            verify_data = result.data or {}
+
                         state.verification_result = verify_data
                         if verify_data.get("passed", False):
                             self._emit_event(
                                 state=state,
                                 event_type="verification_passed",
-                                summary="Deterministic verification passed: all invariants satisfied.",
+                                summary="Deterministic verification passed: all operational and security invariants satisfied.",
                                 relevant_ids={"role_id": state.current_role or ""},
                                 details=verify_data,
                                 step_number=step_count,
@@ -716,17 +838,94 @@ class AgentController:
                                 actor="verifier",
                             )
                             # Rollback automated recovery if verification fails
-                            if self.capabilities.supports_rollback and "apply_policy_change" in [c["tool_name"] for c in state.tool_calls]:
-                                rb_result = self.tools.execute("rollback_policy", {"role_id": state.current_role, "target_version": planned_policy_version})
-                                self._emit_event(
-                                    state=state,
-                                    event_type="rollback",
-                                    summary=f"Automated rollback invoked for {state.current_role} to {planned_policy_version}",
-                                    relevant_ids={"role_id": state.current_role or ""},
-                                    details=rb_result.data or {},
-                                    step_number=step_count,
-                                    actor="security_kernel",
+                            has_applied = any(
+                                c.get("tool_name") in ["apply_policy_change", "apply_change"]
+                                for c in state.tool_calls
+                            )
+                            if self.capabilities.supports_rollback and has_applied:
+                                rollback_attempts += 1
+                                if rollback_attempts > self.config.max_rollback_attempts:
+                                    state.current_phase = "FAILED"
+                                    state.stop_reason = "rollback_failure"
+                                    state.final_outcome = {
+                                        "status": "failed",
+                                        "stop_reason": "rollback_failure",
+                                        "message": f"Verification failed and maximum rollback attempts ({self.config.max_rollback_attempts}) exceeded.",
+                                    }
+                                    self._emit_event(
+                                        state=state,
+                                        event_type="escalate",
+                                        summary=f"Rollback attempts limit ({self.config.max_rollback_attempts}) reached. Immediate escalation.",
+                                        relevant_ids={"role_id": state.current_role or ""},
+                                        details=state.final_outcome,
+                                        step_number=step_count,
+                                        actor="controller",
+                                        reason="Rollback limit reached",
+                                    )
+                                    break
+
+                                rb_result = self.tools.execute(
+                                    "rollback_policy",
+                                    {"role_id": state.current_role, "target_version": planned_policy_version},
                                 )
+
+                                # Independent deterministic verification of rollback (No fake rollback)
+                                rb_verified = False
+                                if self.extended_verifier and rb_result.success:
+                                    rb_ver_res = self.extended_verifier.verify_rollback(
+                                        role_id=state.current_role or "PaymentServiceRole",
+                                        expected_target_version=planned_policy_version,
+                                    )
+                                    rb_verified = rb_ver_res.verified
+
+                                if rb_verified:
+                                    self._emit_event(
+                                        state=state,
+                                        event_type="rollback",
+                                        summary=f"Automated rollback verified for {state.current_role}: restored to version {planned_policy_version}",
+                                        relevant_ids={"role_id": state.current_role or ""},
+                                        details={"restored_version": planned_policy_version, "verified": True},
+                                        step_number=step_count,
+                                        actor="security_kernel",
+                                    )
+                                    state.current_phase = "FAILED"
+                                    state.stop_reason = "verification_failure_rolled_back"
+                                    state.final_outcome = {
+                                        "status": "failed",
+                                        "stop_reason": "verification_failure_rolled_back",
+                                        "message": f"Post-apply verification failed. Automated rollback executed and verified: restored to {planned_policy_version}.",
+                                        "details": verify_data,
+                                    }
+                                    self._emit_event(
+                                        state=state,
+                                        event_type="escalate",
+                                        summary=f"Remediation failed post-apply verification and was safely rolled back to {planned_policy_version}.",
+                                        relevant_ids={"role_id": state.current_role or ""},
+                                        details=state.final_outcome,
+                                        step_number=step_count,
+                                        actor="controller",
+                                        reason="Automated rollback executed following post-change verification failure",
+                                    )
+                                    break
+                                else:
+                                    self._emit_event(
+                                        state=state,
+                                        event_type="escalate",
+                                        summary=f"CRITICAL: Automated rollback failed or could not be verified for {state.current_role}!",
+                                        relevant_ids={"role_id": state.current_role or ""},
+                                        details={"rollback_result": rb_result.data, "error": rb_result.error, "verified": False},
+                                        step_number=step_count,
+                                        actor="security_kernel",
+                                    )
+                                    state.current_phase = "FAILED"
+                                    state.stop_reason = "rollback_failure"
+                                    state.final_outcome = {
+                                        "status": "failed",
+                                        "stop_reason": "rollback_failure",
+                                        "message": f"CRITICAL: Rollback failed or could not be verified for {state.current_role}.",
+                                        "details": {"error": rb_result.error},
+                                    }
+                                    break
                     elif canonical_tool_name == "rollback_policy":
                         self._emit_event(
                             state=state,
