@@ -52,3 +52,13 @@ htmlcov/
 *.log
 *.sqlite
 *.db
+
+# Persistent run artifacts (JSONFileStateStore / SQLite)
+data/runs/
+data/*.db
+data/iam_runs.db
+
+# Node.js
+node_modules/
+.npm
+
