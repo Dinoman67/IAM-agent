@@ -308,3 +308,151 @@ def test_controller_automated_rollback_on_failed_verification():
     role = env.get_role("PaymentServiceRole")
     assert role.current_version == "v1"
 
+
+def test_stop_condition_safe_no_change_required():
+    """If no changes were proposed or needed and verification passes, stop reason is safe_no_change_required."""
+    env = load_environment()
+    # Set the role to already be least-privilege
+    env.apply_policy_version(
+        "PaymentServiceRole",
+        ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData"],
+        "Pre-mitigated state",
+    )
+    tools = create_extended_tool_registry(env)
+    decisions = [
+        AgentDecision(
+            decision_type="tool_call",
+            tool_name="verify_required_access",
+            arguments={"role_id": "PaymentServiceRole"},
+            reason="Verify existing access without proposing modifications",
+        ),
+        AgentDecision(
+            decision_type="complete",
+            reason="Role is already operating as intended",
+            confidence=1.0,
+        ),
+    ]
+    reasoner = MockReasoner(decisions)
+    controller = AgentController(reasoner=reasoner, tool_registry=tools, environment=env)
+    state = controller.run(goal="Check existing role status", role_id="PaymentServiceRole")
+
+    assert state.current_phase == "COMPLETED"
+    assert state.stop_reason == "safe_no_change_required"
+    assert state.final_outcome["status"] == "success"
+
+
+def test_stop_condition_unsupported_capability():
+    """If agent or provider encounters an unsupported capability, stop reason is unsupported_capability."""
+    env = load_environment()
+    tools = create_extended_tool_registry(env)
+    decisions = [
+        AgentDecision(
+            decision_type="escalate",
+            reason="Escalating due to unsupported_capability: provider lacks pre-commit simulation",
+            confidence=0.9,
+            metadata={"unsupported_capability": "simulation"},
+        ),
+    ]
+    reasoner = MockReasoner(decisions)
+    controller = AgentController(reasoner=reasoner, tool_registry=tools, environment=env)
+    state = controller.run(goal="Test unsupported capability stop", role_id="PaymentServiceRole")
+
+    assert state.current_phase == "FAILED"
+    assert state.stop_reason == "unsupported_capability"
+
+
+def test_stale_state_triggers_refresh_and_replan_event():
+    """Security Kernel detects stale version, controller refreshes state and records adapt/replan."""
+    env = load_environment()
+    tools = create_extended_tool_registry(env)
+
+    # First update the role externally so planned version 'v1' is stale (now 'v2')
+    env.apply_policy_version("PaymentServiceRole", ["s3:GetObject", "kms:Decrypt"], "External change")
+
+    decisions = [
+        AgentDecision(
+            decision_type="tool_call",
+            tool_name="apply_policy_change",
+            arguments={
+                "role_id": "PaymentServiceRole",
+                "new_permissions": ["s3:GetObject"],
+                "reason": "Applying on stale assumption",
+            },
+            reason="Attempting apply",
+            confidence=0.95,
+        ),
+        AgentDecision(
+            decision_type="abort",
+            reason="Aborting after replan",
+        ),
+    ]
+    reasoner = MockReasoner(decisions)
+    controller = AgentController(reasoner=reasoner, tool_registry=tools, environment=env)
+    state = controller.run(goal="Test stale state recovery", role_id="PaymentServiceRole")
+
+    # Verify stale state denial and adapt event occurred
+    adapt_events = [e for e in state.audit_trail if e.event_type == "adapt" and "stale_state" in e.details]
+    assert len(adapt_events) >= 1
+    assert adapt_events[0].details.get("refreshed_version") == "v2"
+
+
+def test_llm_reasoner_http_mocked_success(monkeypatch):
+    """Verify LLMReasoner parses structured JSON returned over HTTP from model endpoint."""
+    import httpx
+    fake_json_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"decision_type": "tool_call", "tool_name": "inspect_role", "arguments": {"role_id": "PaymentServiceRole"}, "reason": "Inspecting role via LLM", "confidence": 0.95}'
+                }
+            }
+        ]
+    }
+
+    class FakeResponse:
+        status_code = 200
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return fake_json_response
+
+    def fake_post(*args, **kwargs):
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+
+    reasoner = LLMReasoner(api_key="test-mock-key", mock_fallback=False)
+    state = AgentState(goal="Test LLM reasoner HTTP", current_role="PaymentServiceRole")
+
+    decision = reasoner.decide(state=state)
+    assert decision.decision_type == "tool_call"
+    assert decision.tool_name == "inspect_role"
+    assert decision.arguments == {"role_id": "PaymentServiceRole"}
+    assert decision.confidence == 0.95
+
+
+def test_all_phase2_tools_in_registry():
+    """Verify all 12 Phase 2 tool specifications are registered in extended registry."""
+    env = load_environment()
+    registry = create_extended_tool_registry(env)
+    registered_names = set(t["name"] for t in registry.list_tools())
+
+    required_phase2_tools = {
+        "inspect_role",
+        "inspect_policy",
+        "find_unused_permissions",
+        "analyze_policy",
+        "get_service_dependencies",
+        "simulate_policy_change",
+        "compute_policy_diff",
+        "verify_required_access",
+        "check_security_invariants",
+        "apply_policy_change",
+        "rollback_policy_change",
+        "get_provider_capabilities",
+    }
+
+    for tool_name in required_phase2_tools:
+        assert tool_name in registered_names, f"Missing tool in registry: {tool_name}"
+
+

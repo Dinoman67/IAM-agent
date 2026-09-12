@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from backend.environment.loader import IAMEnvironment
@@ -25,7 +25,7 @@ class ComprehensiveVerificationResult(BaseModel):
 
 
 class ExtendedPolicyVerifier:
-    """Comprehensive verifier executing independent post-apply validation."""
+    """Comprehensive verifier executing independent post-apply validation across providers."""
 
     def __init__(
         self,
@@ -40,8 +40,9 @@ class ExtendedPolicyVerifier:
         self,
         role_id: str,
         expected_permissions: Optional[List[str]] = None,
+        provider: Optional[str] = None,
     ) -> ComprehensiveVerificationResult:
-        """Executes full suite of post-change verifications."""
+        """Executes full suite of post-change verifications with provider awareness."""
         base_res = self.base_verifier.verify(role_id)
         role = self.env.get_role(role_id)
 
@@ -81,11 +82,17 @@ class ExtendedPolicyVerifier:
         else:
             structural_passed = base_res.checks.get("policy_applied", True)
 
-        # 4. Provider capability check
+        # 4. Provider capability and mismatch checks
         provider_passed = True
+        target_provider = self.capabilities.provider_name.lower()
+        if provider and provider.lower() != target_provider:
+            provider_passed = False
+            details.append(f"Provider check: FAIL (provider mismatch: received '{provider}', expected '{target_provider}')")
+
         if self.capabilities.supports_policy_versioning and len(role.policy_versions) <= 1:
             provider_passed = False
             details.append("Provider check: FAIL (provider supports versioning but new version not created)")
+
         checks["provider_compliant"] = provider_passed
 
         passed = functional_passed and security_passed and structural_passed and provider_passed
@@ -103,3 +110,9 @@ class ExtendedPolicyVerifier:
             details=details,
             should_rollback=should_rollback,
         )
+
+
+__all__ = [
+    "ComprehensiveVerificationResult",
+    "ExtendedPolicyVerifier",
+]

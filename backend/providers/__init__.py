@@ -1,6 +1,33 @@
-"""Cloud provider adapters and capability models."""
+"""Cloud provider adapters, capability models, and abstractions."""
 
-from backend.providers.base import BaseProvider
-from backend.providers.capabilities import ProviderCapabilities, AWS_CAPABILITIES, GCP_CAPABILITIES, AZURE_CAPABILITIES
+from backend.providers.base import BaseProvider, IAMProvider, ProviderValidationResult
+from backend.providers.capabilities import (
+    AWS_CAPABILITIES,
+    AZURE_CAPABILITIES,
+    GCP_CAPABILITIES,
+    RESTRICTED_MOCK_CAPABILITIES,
+    CapabilityStatus,
+    ProviderCapabilities,
+    negotiate_capability,
+)
+from backend.providers.common.errors import (
+    ProviderMismatchError,
+    UnsupportedCapabilityError,
+    enforce_provider_match,
+)
 
-__all__ = ["BaseProvider", "ProviderCapabilities", "AWS_CAPABILITIES", "GCP_CAPABILITIES", "AZURE_CAPABILITIES"]
+__all__ = [
+    "IAMProvider",
+    "BaseProvider",
+    "ProviderValidationResult",
+    "ProviderCapabilities",
+    "CapabilityStatus",
+    "negotiate_capability",
+    "AWS_CAPABILITIES",
+    "GCP_CAPABILITIES",
+    "AZURE_CAPABILITIES",
+    "RESTRICTED_MOCK_CAPABILITIES",
+    "ProviderMismatchError",
+    "UnsupportedCapabilityError",
+    "enforce_provider_match",
+]

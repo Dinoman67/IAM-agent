@@ -28,7 +28,7 @@ class SecurityGateResult(BaseModel):
 
 
 class SecurityKernel:
-    """Independent deterministic authority governing IAM mutations."""
+    """Independent deterministic authority governing IAM mutations across all cloud providers."""
 
     # Permissions that cannot be granted or made overly permissive
     PROTECTED_PERMISSIONS = {"iam:*", "*", "sts:AssumeRole*"}
@@ -51,6 +51,7 @@ class SecurityKernel:
         confidence: float,
         simulation_result: Optional[Dict[str, Any]] = None,
         risk_level: str = "medium",
+        provider: Optional[str] = None,
     ) -> SecurityGateResult:
         """Deterministically evaluates if proposed policy change is authorized for application."""
         role = self.env.get_role(role_id)
@@ -67,7 +68,17 @@ class SecurityKernel:
         reason_codes: List[str] = []
         details: Dict[str, Any] = {}
 
-        # 1. Stale State Protection (Optimistic Concurrency)
+        # 1. Provider Mismatch Protection
+        target_provider = self.capabilities.provider_name.lower()
+        if provider and provider.lower() != target_provider:
+            reason_codes.append(f"provider_mismatch:{provider}_vs_{target_provider}")
+            details["provider_mismatch"] = {
+                "source_provider": provider,
+                "target_provider": target_provider,
+                "reason": "Cannot apply changes destined for another cloud provider environment",
+            }
+
+        # 2. Stale State Protection (Optimistic Concurrency)
         if role.current_version != planned_policy_version:
             reason_codes.append("stale_state_detected")
             details["stale_state"] = {
@@ -75,8 +86,17 @@ class SecurityKernel:
                 "current_version": role.current_version,
             }
 
-        # 2. Provider Capabilities Check
-        if not self.capabilities.supports_simulation and simulation_result is None:
+        # 3. Privilege Expansion Check (least-privilege invariant: proposed must not silently grant new unneeded permissions)
+        original_perms = set(role.active_permissions())
+        proposed_perms_set = set(proposed_permissions)
+        expansion = proposed_perms_set - original_perms
+        if expansion:
+            for p in sorted(list(expansion)):
+                reason_codes.append(f"unauthorized_privilege_expansion:{p}")
+            details["privilege_expansion"] = list(expansion)
+
+        # 4. Provider Capabilities Check
+        if not self.capabilities.supports_policy_simulation and simulation_result is None:
             reason_codes.append("unsupported_capability_no_simulation")
         if not self.capabilities.supports_policy_versioning:
             reason_codes.append("unsupported_capability_no_versioning")
@@ -84,20 +104,20 @@ class SecurityKernel:
             # If rollback is not supported by provider, human approval is mandatory
             reason_codes.append("unsupported_capability_no_rollback")
 
-        # 3. Protected Invariants Check: Are protected permissions improperly granted?
+        # 5. Protected Invariants Check: Are protected permissions improperly granted or retained?
         for p in proposed_permissions:
             if p in self.PROTECTED_PERMISSIONS:
                 # Retaining admin wildcard permissions in least-privilege proposal is flagged
                 reason_codes.append(f"protected_permission_retained:{p}")
 
-        # 4. Sensitive Resources Isolation Check
+        # 6. Sensitive Resources Isolation Check
         for resource in self.env.data.resources:
             if resource.is_protected:
                 for perm in resource.required_permissions:
                     if PolicySimulator.is_action_allowed(perm, proposed_permissions):
                         reason_codes.append(f"sensitive_resource_exposed:{resource.id}")
 
-        # 5. Simulation Verification Check
+        # 7. Simulation Verification Check
         if simulation_result is not None:
             if not simulation_result.get("success", False):
                 reason_codes.append("simulation_failed")
@@ -105,10 +125,10 @@ class SecurityKernel:
                 details["missing_permission"] = simulation_result.get("missing_permission")
         else:
             # Mutation without simulation is denied if simulation is supported
-            if self.capabilities.supports_simulation:
+            if self.capabilities.supports_policy_simulation:
                 reason_codes.append("unsimulated_change_denied")
 
-        # 6. Confidence and Risk Gating
+        # 8. Confidence and Risk Gating
         if confidence < self.min_confidence:
             reason_codes.append("insufficient_confidence")
 
@@ -120,6 +140,8 @@ class SecurityKernel:
             or "simulation_failed" in c
             or "sensitive_resource_exposed" in c
             or "unsimulated_change" in c
+            or "provider_mismatch" in c
+            or "unauthorized_privilege_expansion" in c
         ]
 
         if hard_deny_codes:

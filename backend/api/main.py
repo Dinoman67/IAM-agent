@@ -11,12 +11,12 @@ from backend.agent.controller import AgentController
 from backend.agent.reasoner import DeterministicReasoner, LLMReasoner
 from backend.environment.loader import load_environment
 from backend.state.store import InMemoryStateStore
-from backend.tools.iam_tools import create_default_tool_registry
+from backend.tools.iam_tools import create_extended_tool_registry
 
 app = FastAPI(
     title="Autonomous Cloud IAM Least-Privilege Mitigator API",
     description="Provider-agnostic autonomous IAM mitigation, simulation, and deterministic verification API",
-    version="2.0.0",
+    version="3.0.0",
 )
 
 # Global in-memory state store to persist runs across API calls
@@ -32,6 +32,10 @@ class AgentRunRequest(BaseModel):
         default="PaymentServiceRole",
         description="Target IAM role ID to mitigate",
     )
+    provider: str = Field(
+        default="aws",
+        description="Target cloud provider: 'aws', 'gcp', 'azure'",
+    )
     use_mock: bool = Field(
         default=False,
         description="Force deterministic mock reasoner instead of LLM",
@@ -42,6 +46,7 @@ class AgentRunResponse(BaseModel):
     run_id: str
     status: str
     goal: str
+    provider: Optional[str] = "aws"
     role_id: Optional[str] = None
     current_plan: Optional[Dict[str, Any]] = None
     events: List[Dict[str, Any]] = Field(default_factory=list)
@@ -54,14 +59,14 @@ class AgentRunResponse(BaseModel):
 @app.get("/health")
 def health_check() -> Dict[str, str]:
     """Health check endpoint."""
-    return {"status": "ok", "service": "iam-agent", "version": "2.0.0"}
+    return {"status": "ok", "service": "iam-agent", "version": "3.0.0"}
 
 
 @app.post("/api/agent/run", response_model=AgentRunResponse)
 def run_agent(request: AgentRunRequest) -> AgentRunResponse:
     """Trigger an autonomous least-privilege mitigation run."""
     env = load_environment()
-    tool_registry = create_default_tool_registry(env)
+    tool_registry = create_extended_tool_registry(env)
 
     # Determine reasoner engine
     if request.use_mock or os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes"):
@@ -75,14 +80,16 @@ def run_agent(request: AgentRunRequest) -> AgentRunResponse:
         tool_registry=tool_registry,
         state_store=state_store,
         environment=env,
+        provider=request.provider,
     )
 
-    state = controller.run(goal=request.goal, role_id=request.role_id)
+    state = controller.run(goal=request.goal, role_id=request.role_id, provider=request.provider)
 
     return AgentRunResponse(
         run_id=state.run_id,
         status=state.current_phase.lower(),
         goal=state.goal,
+        provider=state.provider,
         role_id=state.current_role,
         current_plan=state.current_plan.model_dump() if state.current_plan else None,
         events=[event.model_dump() for event in state.audit_trail],
