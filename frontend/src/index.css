@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#0B0F17] text-slate-100 antialiased font-sans selection:bg-sky-500/30 selection:text-sky-200;
+  }
+
+  /* Custom scrollbar for SOC console */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0B0F17;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #233044;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #38BDF8;
+  }
+}
+
+.glow-subtle {
+  box-shadow: 0 0 15px -3px rgba(2, 132, 199, 0.15);
+}
+
+.glow-amber {
+  box-shadow: 0 0 15px -3px rgba(245, 158, 11, 0.2);
+}
+
+.glow-rose {
+  box-shadow: 0 0 15px -3px rgba(244, 63, 94, 0.2);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 15px -3px rgba(16, 185, 129, 0.2);
+}
