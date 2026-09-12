@@ -861,6 +861,28 @@ class CheckDriftTool(BaseTool):
         return ToolResult(success=True, data=report.model_dump())
 
 
+class DuelArgs(BaseModel):
+    role_id: str = Field(..., description="Target role ID")
+
+
+class RunAttackerDuelTool(BaseTool):
+    name = "run_attacker_duel"
+    description = "Pit a stolen credential against the old and new policy; report what the attacker reaches."
+    args_schema = DuelArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: DuelArgs) -> ToolResult:
+        from backend.security.duel import run_duel
+
+        try:
+            return ToolResult(success=True, data=run_duel(args.role_id, self.env).model_dump())
+        except ValueError as ex:
+            return ToolResult(success=False, error=str(ex))
+
+
 def create_default_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     """Factory creating and registering the 10 core deterministic IAM tools (Phase 1 contract)."""
     registry = ToolRegistry()
@@ -911,6 +933,7 @@ def create_extended_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     # Startup tools: fleet queue + drift watch
     registry.register(GetFleetRisksTool(env))
     registry.register(CheckDriftTool(env))
+    registry.register(RunAttackerDuelTool(env))
 
     return registry
 
