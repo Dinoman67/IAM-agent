@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from backend.environment.loader import IAMEnvironment
 from backend.environment.simulator import PolicySimulator
 from backend.environment.verifier import PolicyVerifier
+from backend.providers.capabilities import AWS_CAPABILITIES, GCP_CAPABILITIES, AZURE_CAPABILITIES, ProviderCapabilities
+from backend.security.diff import compute_policy_diff
 from backend.tools.base import BaseTool, ToolResult
 from backend.tools.registry import ToolRegistry
 
 
 # =====================================================================
-# 1. get_principal
+# 1. get_principal / inspect_principal
 # =====================================================================
 class GetPrincipalArgs(BaseModel):
     principal_id: str = Field(..., description="Unique ID of the principal to look up")
@@ -23,6 +25,7 @@ class GetPrincipalTool(BaseTool):
     name = "get_principal"
     description = "Retrieve principal identity details and assigned roles."
     args_schema = GetPrincipalArgs
+    risk_classification = "read_only"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -41,8 +44,13 @@ class GetPrincipalTool(BaseTool):
         )
 
 
+class InspectPrincipalTool(GetPrincipalTool):
+    name = "inspect_principal"
+    description = "Inspect principal identity details, assigned roles, and credentials."
+
+
 # =====================================================================
-# 2. get_role
+# 2. get_role / inspect_role
 # =====================================================================
 class GetRoleArgs(BaseModel):
     role_id: str = Field(..., description="Unique identifier of the role")
@@ -52,6 +60,7 @@ class GetRoleTool(BaseTool):
     name = "get_role"
     description = "Retrieve role metadata, active permissions, and policy version history."
     args_schema = GetRoleArgs
+    risk_classification = "read_only"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -77,6 +86,11 @@ class GetRoleTool(BaseTool):
         )
 
 
+class InspectRoleTool(GetRoleTool):
+    name = "inspect_role"
+    description = "Inspect role definition, active permission set, and revision history."
+
+
 # =====================================================================
 # 3. get_access_history
 # =====================================================================
@@ -89,6 +103,7 @@ class GetAccessHistoryTool(BaseTool):
     name = "get_access_history"
     description = "Inspect historical access and CloudTrail execution logs for a role or principal."
     args_schema = GetAccessHistoryArgs
+    risk_classification = "read_only"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -115,6 +130,7 @@ class ListPermissionsTool(BaseTool):
     name = "list_permissions"
     description = "List all active permissions granted to a given IAM role."
     args_schema = ListPermissionsArgs
+    risk_classification = "read_only"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -144,6 +160,7 @@ class FindUnusedPermissionsTool(BaseTool):
         "Identify permissions granted to a role that have never been observed in access logs."
     )
     args_schema = FindUnusedPermissionsArgs
+    risk_classification = "read_only"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -175,6 +192,7 @@ class GetServiceDependenciesTool(BaseTool):
         "Discover transitive service dependencies (e.g. Service -> S3 -> KMS SSE encryption)."
     )
     args_schema = GetServiceDependenciesArgs
+    risk_classification = "read_only"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -189,7 +207,7 @@ class GetServiceDependenciesTool(BaseTool):
 
 
 # =====================================================================
-# 7. simulate_policy
+# 7. simulate_policy / simulate_policy_change
 # =====================================================================
 class SimulatePolicyArgs(BaseModel):
     role_id: str = Field(..., description="Target role ID")
@@ -207,6 +225,7 @@ class SimulatePolicyTool(BaseTool):
         "Simulate impact of candidate permissions on required workflows before applying changes."
     )
     args_schema = SimulatePolicyArgs
+    risk_classification = "simulation"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -233,6 +252,11 @@ class SimulatePolicyTool(BaseTool):
         )
 
 
+class SimulatePolicyChangeTool(SimulatePolicyTool):
+    name = "simulate_policy_change"
+    description = "Run counterfactual simulation on candidate permission changes against production workflows."
+
+
 # =====================================================================
 # 8. apply_policy_change
 # =====================================================================
@@ -256,6 +280,7 @@ class ApplyPolicyChangeTool(BaseTool):
         "Deterministically apply a structured policy change, producing a new immutable policy version."
     )
     args_schema = ApplyPolicyChangeArgs
+    risk_classification = "mutation"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -307,6 +332,7 @@ class VerifyRequiredAccessTool(BaseTool):
         "Deterministically verify that application workflows succeed and protected resources are secure."
     )
     args_schema = VerifyRequiredAccessArgs
+    risk_classification = "read_only"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -322,7 +348,7 @@ class VerifyRequiredAccessTool(BaseTool):
 
 
 # =====================================================================
-# 10. rollback_policy
+# 10. rollback_policy / rollback_policy_change
 # =====================================================================
 class RollbackPolicyArgs(BaseModel):
     role_id: str = Field(..., description="Target role ID")
@@ -333,6 +359,7 @@ class RollbackPolicyTool(BaseTool):
     name = "rollback_policy"
     description = "Restore a previous policy version for a role in case of verification failure."
     args_schema = RollbackPolicyArgs
+    risk_classification = "mutation"
 
     def __init__(self, env: IAMEnvironment) -> None:
         self.env = env
@@ -349,8 +376,154 @@ class RollbackPolicyTool(BaseTool):
             return ToolResult(success=False, error=str(e))
 
 
+class RollbackPolicyChangeTool(RollbackPolicyTool):
+    name = "rollback_policy_change"
+    description = "Rollback active role policy to designated stable revision."
+
+
+# =====================================================================
+# 11. get_provider_capabilities
+# =====================================================================
+class GetProviderCapabilitiesArgs(BaseModel):
+    provider_name: Optional[str] = Field(
+        default="aws", description="Target cloud provider identifier, e.g. 'aws', 'gcp', 'azure'"
+    )
+
+
+class GetProviderCapabilitiesTool(BaseTool):
+    name = "get_provider_capabilities"
+    description = "Inspect provider capabilities (simulation, versioning, rollback, scoping) to ensure parity."
+    args_schema = GetProviderCapabilitiesArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: GetProviderCapabilitiesArgs) -> ToolResult:
+        name = (args.provider_name or "aws").lower()
+        if name == "aws":
+            caps = AWS_CAPABILITIES
+        elif name == "gcp":
+            caps = GCP_CAPABILITIES
+        elif name == "azure":
+            caps = AZURE_CAPABILITIES
+        else:
+            caps = ProviderCapabilities(provider_name=name)
+
+        return ToolResult(
+            success=True,
+            data=caps.model_dump(),
+            metadata={"provider_name": name},
+        )
+
+
+# =====================================================================
+# 12. compute_policy_diff
+# =====================================================================
+class ComputePolicyDiffArgs(BaseModel):
+    role_id: str = Field(..., description="Target role ID")
+    proposed_permissions: Optional[List[str]] = Field(
+        default=None, description="Proposed active permissions"
+    )
+    remove_permissions: Optional[List[str]] = Field(
+        default=None, description="Permissions proposed to be removed"
+    )
+    retained_dependencies: Optional[List[str]] = Field(
+        default=None, description="List of retained transitive dependencies"
+    )
+
+
+class ComputePolicyDiffTool(BaseTool):
+    name = "compute_policy_diff"
+    description = "Compute structured before/after diff of policy changes including added, removed, and kept permissions."
+    args_schema = ComputePolicyDiffArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: ComputePolicyDiffArgs) -> ToolResult:
+        role = self.env.get_role(args.role_id)
+        if not role:
+            return ToolResult(success=False, error=f"Role '{args.role_id}' not found.")
+
+        current = role.active_permissions()
+        if args.proposed_permissions is not None:
+            new_perms = args.proposed_permissions
+        elif args.remove_permissions is not None:
+            new_perms = [p for p in current if p not in args.remove_permissions]
+        else:
+            new_perms = current
+
+        diff = compute_policy_diff(
+            role_id=args.role_id,
+            from_version=role.current_version,
+            original_permissions=current,
+            new_permissions=new_perms,
+            retained_dependencies=args.retained_dependencies,
+        )
+
+        return ToolResult(
+            success=True,
+            data=diff.model_dump(),
+            metadata={"removed_count": len(diff.removed), "kept_count": len(diff.kept)},
+        )
+
+
+# =====================================================================
+# 13. check_security_invariants
+# =====================================================================
+class CheckSecurityInvariantsArgs(BaseModel):
+    role_id: str = Field(..., description="Target role ID")
+    proposed_permissions: Optional[List[str]] = Field(
+        default=None, description="Permissions to evaluate against invariants"
+    )
+
+
+class CheckSecurityInvariantsTool(BaseTool):
+    name = "check_security_invariants"
+    description = "Validate candidate policy against protected permissions and sensitive resource isolation."
+    args_schema = CheckSecurityInvariantsArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: CheckSecurityInvariantsArgs) -> ToolResult:
+        role = self.env.get_role(args.role_id)
+        if not role:
+            return ToolResult(success=False, error=f"Role '{args.role_id}' not found.")
+
+        perms = (
+            args.proposed_permissions
+            if args.proposed_permissions is not None
+            else role.active_permissions()
+        )
+
+        exposed_protected: List[str] = []
+        for resource in self.env.data.resources:
+            if resource.is_protected:
+                for req_perm in resource.required_permissions:
+                    if PolicySimulator.is_action_allowed(req_perm, perms):
+                        exposed_protected.append(f"{resource.id} via '{req_perm}'")
+
+        wildcards = [p for p in perms if "*" in p]
+
+        invariants_satisfied = len(exposed_protected) == 0 and len(wildcards) == 0
+
+        return ToolResult(
+            success=True,
+            data={
+                "invariants_satisfied": invariants_satisfied,
+                "exposed_protected_resources": exposed_protected,
+                "retained_wildcards": wildcards,
+            },
+            metadata={"invariants_satisfied": invariants_satisfied},
+        )
+
+
 def create_default_tool_registry(env: IAMEnvironment) -> ToolRegistry:
-    """Factory creating and registering all 10 IAM tools with the given environment."""
+    """Factory creating and registering the 10 core deterministic IAM tools (Phase 1 contract)."""
     registry = ToolRegistry()
     registry.register(GetPrincipalTool(env))
     registry.register(GetRoleTool(env))
@@ -362,4 +535,22 @@ def create_default_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     registry.register(ApplyPolicyChangeTool(env))
     registry.register(VerifyRequiredAccessTool(env))
     registry.register(RollbackPolicyTool(env))
+    return registry
+
+
+def create_extended_tool_registry(env: IAMEnvironment) -> ToolRegistry:
+    """Factory creating core IAM tools plus Phase 2 extensions and aliases."""
+    registry = create_default_tool_registry(env)
+
+    # Phase 2 extension tools
+    registry.register(GetProviderCapabilitiesTool(env))
+    registry.register(ComputePolicyDiffTool(env))
+    registry.register(CheckSecurityInvariantsTool(env))
+
+    # Aliases
+    registry.register(InspectPrincipalTool(env))
+    registry.register(InspectRoleTool(env))
+    registry.register(SimulatePolicyChangeTool(env))
+    registry.register(RollbackPolicyChangeTool(env))
+
     return registry

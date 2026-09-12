@@ -22,6 +22,8 @@ class BaseTool(ABC):
     name: str
     description: str
     args_schema: Type[BaseModel]
+    risk_classification: str = "read_only"  # "read_only", "simulation", "mutation", "critical"
+    output_schema: Optional[Type[BaseModel]] = None
 
     def run(self, **kwargs: Any) -> ToolResult:
         """Validates arguments against args_schema and delegates to _execute."""
