@@ -15,12 +15,16 @@ from pydantic import BaseModel, Field
 from backend.agent.controller import AgentController
 from backend.agent.decisions import AgentDecision
 from backend.agent.reasoner import DeterministicReasoner, LLMReasoner
+from backend.connectors.aws_readonly import AWSReadOnlyConnector
 from backend.environment.loader import load_environment
+from backend.export.terraform import build_pr_body, to_terraform_hcl, to_terraform_json
 from backend.providers.capabilities import (
     AWS_CAPABILITIES,
     AZURE_CAPABILITIES,
     GCP_CAPABILITIES,
 )
+from backend.security.attack_graph import compute_attack_graph, paths_blocked
+from backend.security.temporal import classify_permissions
 from backend.scenarios import (
     BrokenPolicyReasoner,
     CrossProviderMismatchReasoner,
@@ -490,6 +494,86 @@ def get_run(run_id: str) -> AgentRunResponse:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
 
     return _extract_response_from_state(state)
+
+
+# ---------------- Hero features: live AWS, attack graph, temporal, Terraform PR ----------------
+
+@app.get("/api/aws/live-status")
+def aws_live_status() -> Dict[str, Any]:
+    """Read-only AWS liveness probe (never mutates; falls back to simulator)."""
+    return AWSReadOnlyConnector().status()
+
+
+class TerraformExportRequest(BaseModel):
+    role_id: str = "PaymentServiceRole"
+    permissions: Optional[List[str]] = None
+    version_label: str = "least-privilege"
+
+
+@app.post("/api/export/terraform")
+def export_terraform(req: TerraformExportRequest) -> Dict[str, Any]:
+    """Export least-privilege policy as Terraform HCL/JSON + GitHub PR body with gates."""
+    from backend.security.blast_radius import calculate_blast_radius
+
+    env = load_environment()
+    role = env.get_role(req.role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail=f"Role '{req.role_id}' not found.")
+    original = role.active_permissions()
+    proposed = req.permissions if req.permissions is not None else original
+    removed = sorted(set(original) - set(proposed))
+    retained = sorted(set(original) & set(proposed))
+
+    graph = compute_attack_graph(req.role_id, env)
+    blocked = paths_blocked(graph, proposed, env)
+    temporal = classify_permissions(req.role_id, env)
+    blast = calculate_blast_radius(original, proposed)
+
+    hcl = to_terraform_hcl(req.role_id, proposed, req.version_label)
+    tf_json = to_terraform_json(req.role_id, proposed, req.version_label)
+    pr_body = build_pr_body(
+        role_id=req.role_id,
+        removed=removed,
+        retained=retained,
+        blast_level=blast.level,
+        blast_score=blast.score,
+        verification_passed=None,
+        attack_paths_blocked=blocked,
+        temporal_retained=[f.permission for f in temporal.findings if f.classification == "RARE_BUT_CRITICAL"],
+        kernel_decision="ALLOW" if blast.level in ("LOW", "MEDIUM") else "ESCALATE",
+    )
+    return {
+        "role_id": req.role_id,
+        "hcl": hcl,
+        "terraform_json": tf_json,
+        "pr_body": pr_body,
+        "removed": removed,
+        "retained": retained,
+        "blast": blast.model_dump(),
+        "attack": graph.model_dump(),
+        "attack_paths_blocked": blocked,
+        "temporal": temporal.model_dump(),
+    }
+
+
+@app.get("/api/roles/{role_id}/attack-graph")
+def role_attack_graph(role_id: str) -> Dict[str, Any]:
+    env = load_environment()
+    try:
+        graph = compute_attack_graph(role_id, env)
+    except ValueError as ex:
+        raise HTTPException(status_code=404, detail=str(ex))
+    return graph.model_dump()
+
+
+@app.get("/api/roles/{role_id}/temporal")
+def role_temporal(role_id: str, window_days: int = 365) -> Dict[str, Any]:
+    env = load_environment()
+    try:
+        report = classify_permissions(role_id, env, window_days=window_days)
+    except ValueError as ex:
+        raise HTTPException(status_code=404, detail=str(ex))
+    return report.model_dump()
 
 
 # Serve built frontend static files if present

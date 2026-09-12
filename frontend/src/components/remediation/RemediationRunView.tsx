@@ -23,6 +23,9 @@ import { AgentTimeline } from '../timeline/AgentTimeline';
 import { ReplanHighlight } from '../timeline/ReplanHighlight';
 import { DependencyGraph } from '../dependency/DependencyGraph';
 import { PolicyDiffView } from '../policy/PolicyDiffView';
+import { TerraformExportCard } from '../policy/TerraformExportCard';
+import { AttackGraphView } from '../security/AttackGraph';
+import { TemporalPanel } from '../evidence/TemporalPanel';
 import { SecurityAssessmentCard } from '../security/SecurityAssessmentCard';
 import { SecurityKernelPanel } from '../security/SecurityKernelPanel';
 import { BlockedStateView } from '../security/BlockedStateView';
@@ -326,6 +329,13 @@ export const RemediationRunView: React.FC<RemediationRunViewProps> = ({ run, onR
             verification={run.verification_result}
           />
 
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <AttackGraphView roleId={run.role_id || 'PaymentServiceRole'} />
+            <TemporalPanel roleId={run.role_id || 'PaymentServiceRole'} />
+          </div>
+
+          <TerraformExportCard roleId={run.role_id || 'PaymentServiceRole'} />
+
           <AgentTimeline events={visibleEvents} activeStep={playbackIndex} />
         </div>
       )}
@@ -364,6 +374,7 @@ export const RemediationRunView: React.FC<RemediationRunViewProps> = ({ run, onR
             isBlocked={isBlocked}
           />
           <SecurityKernelPanel decision={run.security_decision} stopReason={run.stop_reason} />
+          <AttackGraphView roleId={run.role_id || 'PaymentServiceRole'} />
         </div>
       )}
     </div>

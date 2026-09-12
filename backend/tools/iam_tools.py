@@ -709,6 +709,116 @@ class ValidateChangeTool(BaseTool):
         )
 
 
+# =====================================================================
+# Hero tools: attack graph, temporal mining, live AWS, Terraform export
+# =====================================================================
+class AttackGraphArgs(BaseModel):
+    role_id: str = Field(..., description="Target role ID")
+
+
+class GetAttackGraphTool(BaseTool):
+    name = "get_attack_graph"
+    description = "Compute attacker-reachable resources and protected paths if this role is compromised."
+    args_schema = AttackGraphArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: AttackGraphArgs) -> ToolResult:
+        from backend.security.attack_graph import compute_attack_graph
+
+        try:
+            graph = compute_attack_graph(args.role_id, self.env)
+        except ValueError as ex:
+            return ToolResult(success=False, error=str(ex))
+        return ToolResult(success=True, data=graph.model_dump())
+
+
+class TemporalArgs(BaseModel):
+    role_id: str = Field(..., description="Target role ID")
+    window_days: int = Field(default=365, description="Lookback window in days")
+
+
+class AnalyzeTemporalTool(BaseTool):
+    name = "analyze_temporal_usage"
+    description = "Classify permissions as FREQUENT / RARE_BUT_CRITICAL / SEASONAL / DEAD over time."
+    args_schema = TemporalArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: TemporalArgs) -> ToolResult:
+        from backend.security.temporal import classify_permissions
+
+        try:
+            report = classify_permissions(args.role_id, self.env, window_days=args.window_days)
+        except ValueError as ex:
+            return ToolResult(success=False, error=str(ex))
+        return ToolResult(success=True, data=report.model_dump())
+
+
+class EmptyArgs(BaseModel):
+    pass
+
+
+class AWSLiveStatusTool(BaseTool):
+    name = "aws_live_status"
+    description = "Probe read-only AWS connectivity (never mutates; falls back to simulator)."
+    args_schema = EmptyArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: EmptyArgs) -> ToolResult:
+        from backend.connectors.aws_readonly import AWSReadOnlyConnector
+
+        return ToolResult(success=True, data=AWSReadOnlyConnector().status())
+
+
+class ExportTerraformArgs(BaseModel):
+    role_id: str = Field(..., description="Target role ID")
+    permissions: Optional[List[str]] = Field(default=None, description="Proposed permissions (default: active)")
+
+
+class ExportTerraformTool(BaseTool):
+    name = "export_terraform"
+    description = "Export least-privilege policy as Terraform HCL + GitHub PR body with gates."
+    args_schema = ExportTerraformArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: ExportTerraformArgs) -> ToolResult:
+        from backend.export.terraform import build_pr_body, to_terraform_hcl
+        from backend.security.attack_graph import compute_attack_graph, paths_blocked
+        from backend.security.blast_radius import calculate_blast_radius
+        from backend.security.temporal import classify_permissions
+
+        role = self.env.get_role(args.role_id)
+        if not role:
+            return ToolResult(success=False, error=f"Role '{args.role_id}' not found.")
+        original = role.active_permissions()
+        proposed = args.permissions or original
+        graph = compute_attack_graph(args.role_id, self.env)
+        temporal = classify_permissions(args.role_id, self.env)
+        blast = calculate_blast_radius(original, proposed)
+        hcl = to_terraform_hcl(args.role_id, proposed)
+        pr = build_pr_body(
+            role_id=args.role_id,
+            removed=sorted(set(original) - set(proposed)),
+            retained=sorted(set(original) & set(proposed)),
+            blast_level=blast.level,
+            blast_score=blast.score,
+            attack_paths_blocked=paths_blocked(graph, proposed, self.env),
+            temporal_retained=[f.permission for f in temporal.findings if f.classification == "RARE_BUT_CRITICAL"],
+        )
+        return ToolResult(success=True, data={"hcl": hcl, "pr_body": pr, "blast": blast.model_dump()})
+
+
 def create_default_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     """Factory creating and registering the 10 core deterministic IAM tools (Phase 1 contract)."""
     registry = ToolRegistry()
@@ -749,6 +859,12 @@ def create_extended_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     registry.register(ApplyChangeTool(env))
     registry.register(RollbackChangeTool(env))
     registry.register(AnalyzePermissionsTool(env))
+
+    # Hero tools: attack graph, temporal mining, live AWS status, Terraform export
+    registry.register(GetAttackGraphTool(env))
+    registry.register(AnalyzeTemporalTool(env))
+    registry.register(AWSLiveStatusTool(env))
+    registry.register(ExportTerraformTool(env))
 
     return registry
 
