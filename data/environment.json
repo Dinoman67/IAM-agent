@@ -1,0 +1,221 @@
+{
+  "principals": [
+    {
+      "id": "principal-payment-svc",
+      "name": "PaymentServicePrincipal",
+      "type": "Service",
+      "roles": ["PaymentServiceRole"]
+    }
+  ],
+  "roles": [
+    {
+      "id": "PaymentServiceRole",
+      "name": "PaymentServiceRole",
+      "description": "IAM execution role for customer payment transactions and checkout processing",
+      "current_version": "v1",
+      "policy_versions": [
+        {
+          "version_id": "v1",
+          "permissions": [
+            "s3:GetObject",
+            "s3:PutObject",
+            "kms:Decrypt",
+            "ec2:*",
+            "iam:*",
+            "dynamodb:*",
+            "cloudwatch:PutMetricData"
+          ],
+          "created_at": "2026-09-01T00:00:00Z",
+          "is_active": true,
+          "reason": "Initial deployment configuration with broad permissions"
+        }
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "id": "s3:GetObject",
+      "service": "s3",
+      "description": "Read objects from S3 buckets",
+      "risk_level": "low"
+    },
+    {
+      "id": "s3:PutObject",
+      "service": "s3",
+      "description": "Write objects to S3 buckets",
+      "risk_level": "medium"
+    },
+    {
+      "id": "kms:Decrypt",
+      "service": "kms",
+      "description": "Decrypt ciphertext with KMS customer managed keys",
+      "risk_level": "medium"
+    },
+    {
+      "id": "cloudwatch:PutMetricData",
+      "service": "cloudwatch",
+      "description": "Publish custom metric data points",
+      "risk_level": "low"
+    },
+    {
+      "id": "ec2:*",
+      "service": "ec2",
+      "description": "Full administrative control over EC2 compute instances",
+      "risk_level": "critical"
+    },
+    {
+      "id": "iam:*",
+      "service": "iam",
+      "description": "Full administrative control over IAM identities and policies",
+      "risk_level": "critical"
+    },
+    {
+      "id": "dynamodb:*",
+      "service": "dynamodb",
+      "description": "Full administrative control over DynamoDB tables and data",
+      "risk_level": "critical"
+    }
+  ],
+  "bindings": [
+    {
+      "principal_id": "principal-payment-svc",
+      "role_id": "PaymentServiceRole",
+      "attached_at": "2026-09-01T00:00:00Z"
+    }
+  ],
+  "access_logs": [
+    {
+      "id": "log-001",
+      "principal_id": "principal-payment-svc",
+      "role_id": "PaymentServiceRole",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::payment-transactions/checkout-session-101.json",
+      "timestamp": "2026-09-10T10:14:00Z",
+      "success": true
+    },
+    {
+      "id": "log-002",
+      "principal_id": "principal-payment-svc",
+      "role_id": "PaymentServiceRole",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::payment-transactions/receipt-101.json",
+      "timestamp": "2026-09-10T10:14:02Z",
+      "success": true
+    },
+    {
+      "id": "log-003",
+      "principal_id": "principal-payment-svc",
+      "role_id": "PaymentServiceRole",
+      "action": "cloudwatch:PutMetricData",
+      "resource": "arn:aws:cloudwatch:::metric/payment-svc",
+      "timestamp": "2026-09-10T10:14:03Z",
+      "success": true
+    },
+    {
+      "id": "log-004",
+      "principal_id": "principal-payment-svc",
+      "role_id": "PaymentServiceRole",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::payment-transactions/checkout-session-102.json",
+      "timestamp": "2026-09-10T10:15:20Z",
+      "success": true
+    },
+    {
+      "id": "log-005",
+      "principal_id": "principal-payment-svc",
+      "role_id": "PaymentServiceRole",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::payment-transactions/receipt-102.json",
+      "timestamp": "2026-09-10T10:15:22Z",
+      "success": true
+    },
+    {
+      "id": "log-006",
+      "principal_id": "principal-payment-svc",
+      "role_id": "PaymentServiceRole",
+      "action": "cloudwatch:PutMetricData",
+      "resource": "arn:aws:cloudwatch:::metric/payment-svc",
+      "timestamp": "2026-09-10T10:15:24Z",
+      "success": true
+    }
+  ],
+  "services": [
+    {
+      "id": "PaymentService",
+      "name": "Payment Processing Service",
+      "owner": "Payment Engineering Team"
+    },
+    {
+      "id": "S3",
+      "name": "Amazon Simple Storage Service",
+      "owner": "Cloud Infrastructure Team"
+    },
+    {
+      "id": "KMS",
+      "name": "AWS Key Management Service",
+      "owner": "Security Engineering Team"
+    }
+  ],
+  "dependencies": [
+    {
+      "service": "PaymentService",
+      "calls_service": "S3",
+      "downstream_dependency": "KMS",
+      "required_permission": "kms:Decrypt",
+      "reason": "PaymentService reads customer checkout records from encrypted S3 bucket 'payment-transactions', which uses KMS key 'arn:aws:kms:::key/payment-key' (SSE-KMS). Reading objects requires kms:Decrypt."
+    }
+  ],
+  "resources": [
+    {
+      "id": "res-s3-payments",
+      "arn": "arn:aws:s3:::payment-transactions/*",
+      "type": "s3",
+      "is_protected": false,
+      "required_permissions": ["s3:GetObject", "s3:PutObject"]
+    },
+    {
+      "id": "res-kms-payment-key",
+      "arn": "arn:aws:kms:::key/payment-key",
+      "type": "kms",
+      "is_protected": false,
+      "required_permissions": ["kms:Decrypt"]
+    },
+    {
+      "id": "res-iam-admin",
+      "arn": "arn:aws:iam:::user/admin",
+      "type": "iam",
+      "is_protected": true,
+      "required_permissions": ["iam:*"]
+    },
+    {
+      "id": "res-ec2-prod",
+      "arn": "arn:aws:ec2:::instance/*",
+      "type": "ec2",
+      "is_protected": true,
+      "required_permissions": ["ec2:*"]
+    },
+    {
+      "id": "res-dynamodb-pii",
+      "arn": "arn:aws:dynamodb:::table/customer-pii",
+      "type": "dynamodb",
+      "is_protected": true,
+      "required_permissions": ["dynamodb:*"]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "payment_checkout",
+      "name": "Payment Checkout Workflow",
+      "description": "Reads encrypted checkout transaction from S3, writes completed receipt to S3, and emits metric",
+      "role_id": "PaymentServiceRole",
+      "required_permissions": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "kms:Decrypt",
+        "cloudwatch:PutMetricData"
+      ],
+      "hidden_dependency_notes": "S3 object retrieval requires kms:Decrypt for SSE-KMS customer key decryption"
+    }
+  ],
+  "simulation_runs": []
+}
