@@ -482,6 +482,17 @@ def main() -> None:
         action="store_true",
         help="Print temporal permission classification and exit",
     )
+    parser.add_argument(
+        "--fleet",
+        action="store_true",
+        help="Print prioritized fleet risk queue and exit",
+    )
+    parser.add_argument(
+        "--export-rego",
+        type=str,
+        default=None,
+        help="Export kernel invariants as OPA Rego to file (e.g. --export-rego iam.rego)",
+    )
 
     args = parser.parse_args()
 
@@ -506,6 +517,22 @@ def main() -> None:
         r = _tc(args.role, _load2())
         for f in r.findings:
             print(f"{f.permission}: {f.classification} -> {f.recommendation} ({f.reason})")
+        sys.exit(0)
+    if args.fleet:
+        from backend.environment.loader import load_environment as _load4
+        from backend.security.prioritization import build_fleet_queue as _fq
+
+        q = _fq(_load4())
+        print(f"Fleet: {q.total_roles} roles, {q.critical_count} critical/high")
+        for r in q.risks:
+            print(f"  [{r.risk_level} {r.risk_score}] {r.role_id}: {r.recommended_action}")
+        sys.exit(0)
+    if args.export_rego:
+        from backend.export.policies import get_rego as _rego
+
+        with open(args.export_rego, "w", encoding="utf-8") as fh:
+            fh.write(_rego())
+        print(f"Wrote OPA Rego to {args.export_rego}")
         sys.exit(0)
     if args.export_tf:
         from backend.environment.loader import load_environment as _load3

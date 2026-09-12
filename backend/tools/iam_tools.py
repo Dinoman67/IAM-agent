@@ -819,6 +819,48 @@ class ExportTerraformTool(BaseTool):
         return ToolResult(success=True, data={"hcl": hcl, "pr_body": pr, "blast": blast.model_dump()})
 
 
+# =====================================================================
+# Startup tools: fleet queue + drift watch
+# =====================================================================
+class GetFleetRisksTool(BaseTool):
+    name = "fleet_risks"
+    description = "Rank all roles by risk so the riskiest identity is fixed first."
+    args_schema = EmptyArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: EmptyArgs) -> ToolResult:
+        from backend.security.prioritization import build_fleet_queue
+
+        return ToolResult(success=True, data=build_fleet_queue(self.env).model_dump())
+
+
+class CheckDriftArgs(BaseModel):
+    role_id: str = Field(..., description="Target role ID")
+    baseline_permissions: List[str] = Field(..., description="Recorded baseline permissions")
+
+
+class CheckDriftTool(BaseTool):
+    name = "check_drift"
+    description = "Compare live permissions against a baseline to detect out-of-band drift."
+    args_schema = CheckDriftArgs
+    risk_classification = "read_only"
+
+    def __init__(self, env: IAMEnvironment) -> None:
+        self.env = env
+
+    def _execute(self, args: CheckDriftArgs) -> ToolResult:
+        from backend.watch.drift import check_drift
+
+        role = self.env.get_role(args.role_id)
+        if not role:
+            return ToolResult(success=False, error=f"Role '{args.role_id}' not found.")
+        report = check_drift(args.role_id, args.baseline_permissions, role.active_permissions())
+        return ToolResult(success=True, data=report.model_dump())
+
+
 def create_default_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     """Factory creating and registering the 10 core deterministic IAM tools (Phase 1 contract)."""
     registry = ToolRegistry()
@@ -865,6 +907,10 @@ def create_extended_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     registry.register(AnalyzeTemporalTool(env))
     registry.register(AWSLiveStatusTool(env))
     registry.register(ExportTerraformTool(env))
+
+    # Startup tools: fleet queue + drift watch
+    registry.register(GetFleetRisksTool(env))
+    registry.register(CheckDriftTool(env))
 
     return registry
 

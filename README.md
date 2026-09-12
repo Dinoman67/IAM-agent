@@ -286,6 +286,17 @@ python main.py --demo provider-mismatch
 2. **Attack-Path Graph** — `GET /api/roles/{id}/attack-graph`, tool `get_attack_graph`, UI `AttackGraphView`. BFS from role permissions to reachable (incl. protected) resources with risk score; `paths_blocked()` quantifies PR impact.
 3. **Temporal Rare-but-Critical Mining** — `GET /api/roles/{id}/temporal`, tool `analyze_temporal_usage`, UI `TemporalPanel`. Classifies `FREQUENT / RARE_BUT_CRITICAL / SEASONAL_CANDIDATE / DEAD` over 365d; `kms:Decrypt` (0 logs + SSE-KMS dependency) is retained, proving `NOT OBSERVED != PROVEN UNNEEDED`.
 
+## 10. Startup Backend (CIEM Loop)
+
+Full discovery → rightsizing → monitoring → remediation loop, startup-grade:
+
+- **Fleet risk queue** — `GET /api/fleet/risks`, tool `fleet_risks`, CLI `--fleet`. Every role scored (wildcards + protected reachability + dead weight), riskiest first with plain-English exposure.
+- **Policy-as-code** — `GET /api/export/policy-as-code?format=rego|cedar|all`, CLI `--export-rego iam.rego`. Kernel invariants as enforceable OPA Rego + Cedar for CI pipelines.
+- **Drift watch** — `POST /api/watch/check`, tool `check_drift`. Baseline-vs-live diff with escalation detection (call from cron/EventBridge).
+- **Tamper-evident ledger** — `POST /api/audit/verify`. Hash-chained audit entries; any edit breaks verification.
+- **Real AWS import** — `POST /api/import/aws-details`. Upload `aws iam get-account-authorization-details` JSON; same engines analyze real roles, no credentials needed.
+- **API-key guard** — set `API_KEY` to require `x-api-key` on mutating POSTs (reads stay open; off by default so demos pass).
+
 ---
 
 ## 10. Known Limitations
