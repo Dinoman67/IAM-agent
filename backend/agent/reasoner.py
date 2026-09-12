@@ -302,9 +302,25 @@ Do NOT output markdown blocks or extra text. Output ONLY the JSON object.
         mock_fallback: bool = True,
     ) -> None:
         self.provider = (provider or os.getenv("LLM_PROVIDER", "openai")).lower()
-        self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")
-        self.model = model or os.getenv("LLM_MODEL", "gpt-4o")
-        self.base_url = base_url or os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+        self.api_key = (
+            api_key
+            or os.getenv("LLM_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+            or os.getenv("ANTHROPIC_API_KEY")
+        )
+        default_model = "gemini-2.0-flash" if self.provider == "gemini" else "gpt-4o"
+        self.model = model or os.getenv("LLM_MODEL", default_model)
+
+        if base_url:
+            self.base_url = base_url
+        elif self.provider == "gemini":
+            self.base_url = os.getenv(
+                "LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
+            )
+        else:
+            self.base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+
         self.mock_fallback = mock_fallback
         self.is_mock = os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes") or not bool(self.api_key)
         self._fallback_reasoner = DeterministicReasoner()
@@ -461,4 +477,8 @@ AVAILABLE TOOLS:
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match:
             text = match.group(1)
+        else:
+            match_obj = re.search(r"(\{[\s\S]*\})", text)
+            if match_obj:
+                text = match_obj.group(1)
         return json.loads(text)
