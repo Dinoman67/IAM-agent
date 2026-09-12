@@ -17,6 +17,8 @@ from backend.agent.decisions import AgentDecision
 from backend.agent.reasoner import DeterministicReasoner, LLMReasoner
 from backend.connectors.aws_readonly import AWSReadOnlyConnector
 from backend.environment.loader import load_environment
+from backend.evidence.ledger import chain_from_events, verify_chain
+from backend.export.policies import get_cedar, get_rego
 from backend.export.terraform import build_pr_body, to_terraform_hcl, to_terraform_json
 from backend.providers.capabilities import (
     AWS_CAPABILITIES,
@@ -78,6 +80,20 @@ def _build_state_store():
 
 
 state_store = _build_state_store()
+
+# Optional API-key guard for mutating calls (startup-grade; open by default so demos/tests pass).
+def _require_api_key(http_req: Request) -> None:
+    expected = os.getenv("API_KEY", "")
+    if not expected:
+        return
+    got = ""
+    try:
+        got = http_req.headers.get("x-api-key", "")
+    except Exception:
+        got = ""
+    if got != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing x-api-key.")
+
 
 # Minimal in-memory rate limiter for expensive agent runs (Fix #8).
 # 30 POST /api/agent/run per minute per client IP. No extra deps.
@@ -439,6 +455,7 @@ def _execute_run(
 @app.post("/api/agent/run", response_model=AgentRunResponse)
 def run_agent(request: AgentRunRequest, http_req: Request) -> AgentRunResponse:
     """Trigger an autonomous least-privilege mitigation run."""
+    _require_api_key(http_req)
     # Fix #8: basic per-IP rate limit (30/min default, configurable via RATE_LIMIT_PER_MIN).
     try:
         client_id = http_req.client.host if http_req and http_req.client else "unknown"
@@ -512,8 +529,9 @@ class TerraformExportRequest(BaseModel):
 
 
 @app.post("/api/export/terraform")
-def export_terraform(req: TerraformExportRequest) -> Dict[str, Any]:
+def export_terraform(req: TerraformExportRequest, http_req: Request) -> Dict[str, Any]:
     """Export least-privilege policy as Terraform HCL/JSON + GitHub PR body with gates."""
+    _require_api_key(http_req)
     from backend.security.blast_radius import calculate_blast_radius
 
     env = load_environment()
@@ -611,6 +629,95 @@ def audit_bundle(run_id: str) -> Dict[str, Any]:
         "chain_sha256": chain,
         "principle": "AI proposes. Deterministic controls decide.",
     }
+
+
+class AuditVerifyRequest(BaseModel):
+    run_id: str = Field(..., description="Run whose audit trail becomes a verifiable chain")
+
+
+@app.post("/api/audit/verify")
+def audit_verify(req: AuditVerifyRequest) -> Dict[str, Any]:
+    """Rebuild the hash-chained ledger from a run's events and verify tamper-evidence."""
+    state = state_store.get(req.run_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Run '{req.run_id}' not found.")
+    events = [e.model_dump() for e in state.audit_trail]
+    chain = chain_from_events(events)
+    result = verify_chain(chain)
+    result["run_id"] = req.run_id
+    return result
+
+
+@app.get("/api/fleet/risks")
+def fleet_risks() -> Dict[str, Any]:
+    """Prioritized risk queue across all roles — fix the riskiest identity first."""
+    from backend.security.prioritization import build_fleet_queue
+
+    return build_fleet_queue(load_environment()).model_dump()
+
+
+@app.get("/api/export/policy-as-code")
+def export_policy_as_code(format: str = "all") -> Dict[str, Any]:
+    """Kernel invariants as enforceable OPA Rego + Cedar policies for CI pipelines."""
+    fmt = (format or "all").lower()
+    out: Dict[str, Any] = {}
+    if fmt in ("all", "rego"):
+        out["rego"] = get_rego()
+    if fmt in ("all", "cedar"):
+        out["cedar"] = get_cedar()
+    if not out:
+        raise HTTPException(status_code=400, detail="format must be rego, cedar, or all")
+    out["evaluate"] = "opa eval -d iam.rego -i tfplan.json 'data.iam.least_privilege.deny'"
+    return out
+
+
+class DriftCheckRequest(BaseModel):
+    role_id: str = "PaymentServiceRole"
+    baseline_permissions: List[str] = Field(default_factory=list)
+    current_permissions: Optional[List[str]] = None
+    baseline_version: Optional[str] = None
+    current_version: Optional[str] = None
+
+
+@app.post("/api/watch/check")
+def watch_check(req: DriftCheckRequest) -> Dict[str, Any]:
+    """Detect out-of-band drift vs a recorded baseline (cron/EventBridge calls this)."""
+    from backend.watch.drift import check_drift
+
+    current = req.current_permissions
+    if current is None:
+        env = load_environment()
+        role = env.get_role(req.role_id)
+        if not role:
+            raise HTTPException(status_code=404, detail=f"Role '{req.role_id}' not found.")
+        current = role.active_permissions()
+        if req.current_version is None:
+            req.current_version = role.current_version
+    return check_drift(
+        role_id=req.role_id,
+        baseline_permissions=req.baseline_permissions,
+        current_permissions=current,
+        baseline_version=req.baseline_version,
+        current_version=req.current_version,
+    ).model_dump()
+
+
+@app.post("/api/import/aws-details")
+def import_aws_details(payload: Dict[str, Any], http_req: Request) -> Dict[str, Any]:
+    """Analyze a real `aws iam get-account-authorization-details` JSON dump (offline, no creds)."""
+    _require_api_key(http_req)
+    from backend.connectors.aws_import import summarize_account_details
+
+    data = payload.get("payload", payload) if isinstance(payload, dict) else {}
+    if not isinstance(data, dict) or ("RoleDetailList" not in data and "roles" not in data):
+        raise HTTPException(
+            status_code=400,
+            detail="Expected get-account-authorization-details JSON (RoleDetailList).",
+        )
+    try:
+        return summarize_account_details(data)
+    except Exception as ex:
+        raise HTTPException(status_code=422, detail=f"Import failed: {ex}")
 
 
 # Serve built frontend static files if present
