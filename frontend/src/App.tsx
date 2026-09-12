@@ -79,8 +79,23 @@ export const App: React.FC = () => {
     loadInitialData();
   }, []);
 
+  // Poll async runs until terminal (Fix #9: async_run previously never polled)
+  const pollAgentRun = async (runId: string, maxAttempts = 60): Promise<AgentRunResponse> => {
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const polled = await getAgentRun(runId);
+      const terminal = ['completed', 'failed'].includes(polled.status);
+      if (terminal || (polled.events && polled.events.length > 0 && polled.stop_reason)) {
+        return polled;
+      }
+      // Completed/failed without events yet still counts if stop_reason set
+      if (terminal) return polled;
+    }
+    return getAgentRun(runId);
+  };
+
   // Handler to trigger remediation run
-  const handleStartRemediation = async (scenarioOverride?: DemoScenario) => {
+  const handleStartRemediation = async (scenarioOverride?: DemoScenario, useAsync = false) => {
     setIsRunning(true);
     setError(null);
 
@@ -105,9 +120,16 @@ export const App: React.FC = () => {
         provider: selectedProvider,
         scenario: activeScenario,
         use_mock: true, // Deterministic mock for instant, reliable judge demo
+        async_run: useAsync,
       });
 
-      setCurrentRun(runResponse);
+      // If backend returns a placeholder (async), poll until terminal
+      const finalRun =
+        runResponse.status === 'observing' && runResponse.run_id
+          ? await pollAgentRun(runResponse.run_id)
+          : runResponse;
+
+      setCurrentRun(finalRun);
       setActiveNav('remediation');
 
       // Refresh runs list & metrics
