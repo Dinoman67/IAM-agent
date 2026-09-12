@@ -52,3 +52,8 @@ htmlcov/
 *.log
 *.sqlite
 *.db
+
+# Node.js
+node_modules/
+.npm
+
