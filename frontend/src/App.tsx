@@ -17,15 +17,39 @@ import {
   listRuns,
   triggerAgentRun,
 } from './services/api';
-import { Header } from './components/layout/Header';
+import { Header, NavKey } from './components/layout/Header';
 import { DashboardPage } from './pages/DashboardPage';
+import { LandingPage } from './pages/LandingPage';
+import { LearnPage } from './pages/LearnPage';
 import { RemediationPage } from './pages/RemediationPage';
 import { CapabilitiesPage } from './pages/CapabilitiesPage';
 import { AuditPage } from './pages/AuditPage';
+import { WelcomeModal } from './components/onboarding/WelcomeModal';
+import { OnboardingChecklist } from './components/onboarding/OnboardingChecklist';
+import { GuidedTour } from './components/onboarding/GuidedTour';
+import { ExecutiveSummary } from './components/exec/ExecutiveSummary';
+
+const firstVisit = () => {
+  try {
+    return localStorage.getItem('iam_seen') !== '1';
+  } catch {
+    return true;
+  }
+};
 
 export const App: React.FC = () => {
   const [systemHealthy, setSystemHealthy] = useState<boolean>(true);
-  const [activeNav, setActiveNav] = useState<'dashboard' | 'remediation' | 'providers' | 'audit'>('dashboard');
+  const [activeNav, setActiveNav] = useState<NavKey>(() => (firstVisit() ? 'landing' : 'dashboard'));
+  const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => firstVisit());
+  const [tourOpen, setTourOpen] = useState<boolean>(false);
+  const [checklistDismissed, setChecklistDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('iam_checklist_dismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [visitedLearn, setVisitedLearn] = useState<boolean>(false);
 
   const [roles, setRoles] = useState<Role[]>([]);
   const [providers, setProviders] = useState<Record<ProviderName, ProviderCapabilities> | undefined>();
@@ -77,6 +101,19 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadInitialData();
+    // Shareable demo link (?demo=aws autoplay) + guided tour (?tour=1)
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('demo') === 'aws') {
+        setSelectedScenario('aws');
+        setSelectedRole('PaymentServiceRole');
+        setSelectedProvider('aws');
+        setTimeout(() => handleStartRemediation('aws'), 600);
+      }
+      if (params.get('tour') === '1') setTourOpen(true);
+    } catch {
+      // ignore
+    }
   }, []);
 
   // Poll async runs until terminal (Fix #9: async_run previously never polled)
@@ -144,6 +181,28 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleSelectNav = (nav: NavKey) => {
+    setActiveNav(nav);
+    if (nav === 'learn') setVisitedLearn(true);
+    try {
+      localStorage.setItem('iam_seen', '1');
+    } catch {
+      // ignore
+    }
+  };
+
+  const handlePersona = (persona: 'new' | 'expert') => {
+    setWelcomeOpen(false);
+    try {
+      localStorage.setItem('iam_seen', '1');
+      localStorage.setItem('iam_persona', persona);
+    } catch {
+      // ignore
+    }
+    if (persona === 'new') setTourOpen(true);
+    else handleSelectNav('learn');
+  };
+
   const handleSelectRun = async (runId: string) => {
     try {
       const runData = await getAgentRun(runId);
@@ -160,7 +219,7 @@ export const App: React.FC = () => {
       <Header
         systemHealthy={systemHealthy}
         activeNav={activeNav}
-        onSelectNav={setActiveNav}
+        onSelectNav={handleSelectNav}
         onQuickDemo={() => {
           setSelectedScenario('aws');
           setSelectedRole('PaymentServiceRole');
@@ -170,9 +229,75 @@ export const App: React.FC = () => {
         isDemoRunning={isRunning}
       />
 
+      <WelcomeModal
+        open={welcomeOpen}
+        onPick={handlePersona}
+        onClose={() => {
+          setWelcomeOpen(false);
+          try {
+            localStorage.setItem('iam_seen', '1');
+          } catch {
+            // ignore
+          }
+        }}
+      />
+      <GuidedTour open={tourOpen} onClose={() => setTourOpen(false)} />
+
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {activeNav === 'landing' && (
+          <LandingPage
+            onLaunchDemo={() => handleStartRemediation('aws')}
+            onHowItWorks={() => handleSelectNav('learn')}
+            onOpenConsole={() => handleSelectNav('dashboard')}
+            isRunning={isRunning}
+          />
+        )}
+
+        {activeNav === 'learn' && <LearnPage onLaunchDemo={() => handleStartRemediation('aws')} />}
+
         {activeNav === 'dashboard' && (
+          <div className="space-y-5">
+            {!checklistDismissed && (
+              <OnboardingChecklist
+                state={{ ranDemo: runs.length > 0 || !!currentRun, viewedRun: !!currentRun, visitedLearn }}
+                onRunDemo={() => handleStartRemediation('aws')}
+                onViewRun={() => currentRun && handleSelectNav('remediation')}
+                onVisitLearn={() => handleSelectNav('learn')}
+                onDismiss={() => {
+                  setChecklistDismissed(true);
+                  try {
+                    localStorage.setItem('iam_checklist_dismissed', '1');
+                  } catch {
+                    // ignore
+                  }
+                }}
+              />
+            )}
+            <ExecutiveSummary roleId={selectedRole} runId={currentRun?.run_id} />
+            {runs.length === 0 && !currentRun && !isRunning ? (
+              <div className="rounded-xl border border-dashed border-soc-border bg-soc-card/40 p-8 text-center">
+                <div className="text-sm font-bold text-white">No runs yet — start with sample data</div>
+                <p className="mt-1 text-xs text-slate-400 max-w-md mx-auto">
+                  We've pre-loaded PaymentServiceRole (7 permissions, 1 hidden KMS coupling). Run the demo to see the
+                  full investigate → simulate → replan → verify loop.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleStartRemediation('aws')}
+                  className="mt-4 px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold cursor-pointer"
+                >
+                  Run sample assessment
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTourOpen(true)}
+                  className="ml-2 mt-4 px-5 py-2.5 rounded-lg border border-soc-border text-slate-300 text-xs font-mono cursor-pointer"
+                >
+                  Take the tour
+                </button>
+              </div>
+            ) : null}
           <DashboardPage
             metrics={metrics}
             roles={roles}
@@ -189,11 +314,12 @@ export const App: React.FC = () => {
               setSelectedProvider('aws');
               handleStartRemediation('aws');
             }}
-            onViewArchitecture={() => setActiveNav('providers')}
+            onViewArchitecture={() => handleSelectNav('providers')}
             isRunning={isRunning}
             runs={runs}
             onSelectRun={handleSelectRun}
           />
+          </div>
         )}
 
         {activeNav === 'remediation' && (

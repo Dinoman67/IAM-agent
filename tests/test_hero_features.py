@@ -89,3 +89,35 @@ def test_hero_tools_registered():
     assert reg.execute("analyze_temporal_usage", {"role_id": "PaymentServiceRole"}).success is True
     assert reg.execute("aws_live_status", {}).success is True
     assert reg.execute("export_terraform", {"role_id": "PaymentServiceRole"}).success is True
+
+
+def test_compliance_endpoint():
+    from starlette.testclient import TestClient
+    from backend.api.main import app
+
+    client = TestClient(app)
+    r = client.get("/api/compliance/PaymentServiceRole")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["role_id"] == "PaymentServiceRole"
+    ids = {(c["framework"], c["control_id"]) for c in body["controls"]}
+    assert ("CIS AWS v1.5", "1.20") in ids
+    assert ("SOC 2", "CC6.1") in ids
+    assert client.get("/api/compliance/NOPE").status_code == 404
+
+
+def test_audit_bundle_endpoint():
+    from starlette.testclient import TestClient
+    from backend.api.main import app
+
+    client = TestClient(app)
+    run = client.post(
+        "/api/agent/run",
+        json={"scenario": "aws", "role_id": "PaymentServiceRole", "use_mock": True},
+    ).json()
+    bundle = client.get(f"/api/audit/bundle/{run['run_id']}")
+    assert bundle.status_code == 200
+    body = bundle.json()
+    assert body["event_count"] > 0
+    assert len(body["chain_sha256"]) == 64
+    assert client.get("/api/audit/bundle/NOPE").status_code == 404

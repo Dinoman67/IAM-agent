@@ -24,6 +24,7 @@ from backend.providers.capabilities import (
     GCP_CAPABILITIES,
 )
 from backend.security.attack_graph import compute_attack_graph, paths_blocked
+from backend.security.compliance import build_compliance_report
 from backend.security.temporal import classify_permissions
 from backend.scenarios import (
     BrokenPolicyReasoner,
@@ -574,6 +575,42 @@ def role_temporal(role_id: str, window_days: int = 365) -> Dict[str, Any]:
     except ValueError as ex:
         raise HTTPException(status_code=404, detail=str(ex))
     return report.model_dump()
+
+
+@app.get("/api/compliance/{role_id}")
+def role_compliance(role_id: str) -> Dict[str, Any]:
+    """Auditor-friendly compliance mapping (CIS / SOC 2 / PCI) with plain-English."""
+    env = load_environment()
+    try:
+        return build_compliance_report(role_id, env).model_dump()
+    except ValueError as ex:
+        raise HTTPException(status_code=404, detail=str(ex))
+
+
+@app.get("/api/audit/bundle/{run_id}")
+def audit_bundle(run_id: str) -> Dict[str, Any]:
+    """Exportable hash-chained audit bundle (download for auditors / judges)."""
+    import hashlib
+    import json as _json
+
+    state = state_store.get(run_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+    events = [e.model_dump() for e in state.audit_trail]
+    chain = hashlib.sha256(_json.dumps(events, sort_keys=True, default=str).encode()).hexdigest()
+    return {
+        "run_id": run_id,
+        "role_id": state.current_role,
+        "provider": state.provider,
+        "status": state.current_phase.lower(),
+        "stop_reason": state.stop_reason,
+        "policy_diff": state.policy_diff,
+        "verification": state.verification_result,
+        "events": events,
+        "event_count": len(events),
+        "chain_sha256": chain,
+        "principle": "AI proposes. Deterministic controls decide.",
+    }
 
 
 # Serve built frontend static files if present

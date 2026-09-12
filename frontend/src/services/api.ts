@@ -134,3 +134,30 @@ export async function getAWSLiveStatus(): Promise<{ live: boolean; reason?: stri
   if (!res.ok) throw new Error(`Live status failed: ${res.statusText}`);
   return res.json();
 }
+
+export interface ComplianceControl {
+  framework: string;
+  control_id: string;
+  title: string;
+  plain_english: string;
+  status: 'pass' | 'fail' | 'review';
+  evidence: string;
+}
+
+export async function getCompliance(roleId: string): Promise<{
+  role_id: string;
+  controls: ComplianceControl[];
+  passing: number;
+  failing: number;
+  review: number;
+}> {
+  const res = await fetch(`${API_BASE}/api/compliance/${encodeURIComponent(roleId)}`);
+  if (!res.ok) throw new Error(`Compliance failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getAuditBundle(runId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/audit/bundle/${encodeURIComponent(runId)}`);
+  if (!res.ok) throw new Error(`Bundle failed: ${res.statusText}`);
+  return res.json();
+}
