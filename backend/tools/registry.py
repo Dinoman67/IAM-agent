@@ -43,6 +43,7 @@ class ToolRegistry:
                     "name": name,
                     "description": tool.description,
                     "parameters": schema_json,
+                    "risk_classification": getattr(tool, "risk_classification", "read_only"),
                 }
             )
         return descriptors
