@@ -1,232 +1,252 @@
 # Autonomous Cloud IAM Least-Privilege Mitigator
 
-> **PS10 — Autonomous Cloud IAM Least-Privilege Mitigator (Phase 3)**  
-> **“A genuinely functional, provider-agnostic IAM security engine where AI performs bounded planning and reasoning, while deterministic security controls simulate, verify, authorize, and enforce changes across AWS, GCP, and Azure.”**
+> **PS10 — Autonomous Cloud IAM Least-Privilege Mitigator (Phase 4)**  
+> **“Safety, Verification & Autonomous Remediation Hardening: An authoritative Security Kernel, deterministic blast radius assessment, non-bypassable safety invariants, independent rollback verification, and evidence-gated autonomy.”**
 
-[![Tests](https://img.shields.io/badge/tests-77%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-93%20passing-brightgreen.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](requirements.txt)
 [![FastAPI](https://img.shields.io/badge/FastAPI-3.0.0-009688.svg)](backend/api/main.py)
-[![Phase](https://img.shields.io/badge/phase-3%20provider--agnostic-purple.svg)](README.md)
+[![Phase](https://img.shields.io/badge/phase-4%20safety%20%26%20verification-purple.svg)](README.md)
 
 ---
 
-## 1. Problem Statement
+## 1. Phase 4 Objective & Core Principles
 
-In enterprise multi-cloud environments, IAM permissions accumulate over time and rapidly become excessively broad. Administrators and developers routinely assign wildcard permissions (`*`, `ec2:*`, `iam:*`, `roles/editor`) to avoid blocking deployments.
+Phase 4 hardens the autonomous IAM remediation loop to make it **safe enough to trust in production environments**.
 
-Achieving true least privilege is hazardous because revoking unlogged permissions risks breaking critical business operations—particularly when workloads rely on hidden, transitive infrastructure dependencies (e.g., an S3 bucket requiring KMS key decryption permissions for server-side encryption).
+Our architecture strictly enforces the separation of responsibilities:
+```text
+LLM                  = Planner / Reasoner (suggests hypotheses, never holds final authority)
+Deterministic Tools  = Capabilities (inspect, simulate, diff, apply, verify)
+Security Kernel      = Final Authority (evaluates invariants, authorizes or rejects)
+Provider Adapters    = Provider-Specific Execution (AWS, GCP, Azure fidelity)
+Extended Verifier    = Independent Confirmation (validates functional & security invariants post-change)
+Audit Trail          = Tamper-Evident Provenance (cryptographic hashes, step sequencing, evidence citations)
+```
 
-Crucially:
-$$\text{NOT OBSERVED} \neq \text{PROVEN UNNEEDED}$$
-
-Phase 3 transitions our architecture from mock vendor stubs into a **genuinely functional, provider-agnostic IAM engine** with authentic multi-cloud fidelity across AWS, GCP, and Azure.
+### Core Security Tenets
+1. **The LLM is NEVER the final authority.** An LLM proposal is merely a candidate until deterministically authorized by the Security Kernel.
+2. **Deterministic Security Kernel is the gatekeeper.** No cloud mutation can occur without Kernel authorization.
+3. **$\text{NOT OBSERVED} \neq \text{PROVEN UNNEEDED}$**. Unlogged permissions cannot be pruned unless counterfactually simulated or proven redundant by architectural dependency analysis.
+4. **Fail-Closed on Uncertainty.** Any evidence marked `UNKNOWN` or with low confidence forces escalation/blocking, never automated approval.
+5. **No Fake Verification or Rollback.** Verification independently queries actual live cloud state, and rollback is cryptographically confirmed.
+6. **Bounded Execution & Loop Prevention.** Rollback is attempted at most once (`max_rollback_attempts = 1`), and repeated failed tool actions halt autonomy cleanly (`max_failed_action_repeats = 2`).
 
 ---
 
 ## 2. Architecture & Authority Boundary
 
 ```text
-                         USER GOAL
-                            │
-                            ▼
-                    ┌────────────────┐
-                    │   LLM AGENT    │
-                    │ Planner/Reason │
-                    └───────┬────────┘
-                            │
-                            ▼
-                ┌────────────────────────┐
-                │ Provider-Neutral Tools │
-                └───────────┬────────────┘
-                            │
-                            ▼
-                 ┌───────────────────────┐
-                 │     Common IAM IR    │
-                 └───────────┬───────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-        ┌──────────┐   ┌──────────┐   ┌──────────┐
-        │   AWS    │   │   GCP    │   │  Azure   │
-        │ Adapter  │   │ Adapter  │   │ Adapter  │
-        └────┬─────┘   └────┬─────┘   └────┬─────┘
-             │              │              │
-             └──────────────┼──────────────┘
-                            ▼
-                 ┌──────────────────────┐
-                 │ Deterministic Engine │
-                 │ Analysis / Simulation│
-                 │ / Validation         │
-                 └──────────┬───────────┘
-                            ▼
-                 ┌──────────────────────┐
-                 │    Security Kernel   │
-                 │    AUTHORITY LAYER   │
-                 └──────────┬───────────┘
-                            ▼
-                    Apply / Escalate
-                            │
-                            ▼
-                  Verify + Audit + State
+                             USER GOAL
+                                │
+                                ▼
+                        ┌────────────────┐
+                        │   LLM AGENT    │
+                        │ Planner/Reason │
+                        └───────┬────────┘
+                                │ (Proposes candidate changes)
+                                ▼
+                    ┌────────────────────────┐
+                    │ Provider-Neutral Tools │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │     Common IAM IR      │
+                    └───────────┬────────────┘
+                                │
+                 ┌──────────────┼──────────────┐
+                 ▼              ▼              ▼
+           ┌──────────┐   ┌──────────┐   ┌──────────┐
+           │   AWS    │   │   GCP    │   │  Azure   │
+           │ Adapter  │   │ Adapter  │   │ Adapter  │
+           └────┬─────┘   └────┬─────┘   └────┬─────┘
+                │              │              │
+                └──────────────┼──────────────┘
+                               ▼
+                    ┌────────────────────────┐
+                    │  Deterministic Engine  │
+                    │  Pre-Commit Simulator  │
+                    │  Dependency Tracer     │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+               ╔══════════════════════════════════╗
+               ║     SECURITY KERNEL GATEWAY      ║
+               ║  11 Explicit Invariants          ║
+               ║  7-Dimension Blast Radius        ║
+               ║  Privilege Expansion Guard       ║
+               ║  Evidence Sufficiency Gate       ║
+               ║  Policy Regression Test Suite    ║
+               ╚════════════════┬═════════════════╝
+                                │
+                    ┌───────────┴───────────┐
+             ALLOW  │                       │ DENY / ESCALATE
+                    ▼                       ▼
+           ┌─────────────────┐     ┌───────────────────┐
+           │  Apply Mutation │     │ Escalate to Human │
+           └────────┬────────┘     │ / Safety Halt     │
+                    │              └───────────────────┘
+                    ▼
+         ┌─────────────────────┐
+         │  Extended Verifier  │
+         │  Live Workflows     │
+         │  Regression Suite   │
+         │  Resource Isolation │
+         └──────────┬──────────┘
+                    │
+            PASS    │    FAIL
+        ┌───────────┴───────────┐
+        ▼                       ▼
+┌──────────────┐     ┌─────────────────────┐
+│  COMPLETED   │     │  Automated Rollback │
+│  Audit Trail │     │  to Prior Version   │
+└──────────────┘     │  & Verified Restore │
+                     └─────────────────────┘
 ```
 
-### Critical Design Principle
-> **The provider adapter provides capabilities, transformations, and execution mechanisms; it cannot grant itself authority.**  
-> Authority remains exclusively with the deterministic **Security Kernel** and independent post-apply **Verification**.
+---
+
+## 3. Explicit Security Invariants
+
+The Security Kernel (`backend/security/kernel.py`) deterministically enforces 11 non-bypassable security invariants (`backend/security/invariants.py`):
+
+| Invariant ID | Severity | Category | Rule Enforced |
+|---|:---:|:---:|---|
+| `NO_PRIVILEGE_EXPANSION` | Critical | Privilege | Changes must never expand actions, widen wildcards, broaden resources, weaken conditions, or widen authorization scopes beyond baseline. |
+| `NO_PROTECTED_PERMISSION_MUTATION` | Critical | Privilege | Critical administrative capabilities (`iam:*`, `iam:CreateRole`, `iam:AttachRolePolicy`, `kms:ScheduleKeyDeletion`) cannot be mutated or pruned without human approval. |
+| `NO_PROTECTED_RESOURCE_EXPOSURE` | Critical | Resource | Sensitive resources (`*admin*`, `*customer-pii*`, `*audit-trail*`) must remain strictly shielded from unauthorized principals. |
+| `NO_CROSS_PROVIDER_MUTATION` | Critical | Isolation | Policies originating from one cloud provider cannot mutate infrastructure in another provider. |
+| `NO_CROSS_TENANT_MUTATION` | Critical | Isolation | Multi-tenant isolation prohibits principals from accessing or mutating resources belonging to foreign tenants or accounts. |
+| `NO_STALE_STATE_MUTATION` | High | State | Optimistic concurrency rejects mutations planned against stale policy versions, triggering refresh and autonomous replanning. |
+| `NO_MUTATION_WITHOUT_EVIDENCE` | High | Evidence | Every permission removal must be substantiated by empirical access logs, counterfactual simulation, or architectural dependency graph. |
+| `NO_MUTATION_WITHOUT_SIMULATION` | High | Verification | When provider supports simulation, no mutation can be authorized without counterfactual pre-commit workflow simulation. |
+| `NO_MUTATION_WITHOUT_PRE_APPLY_VERIFICATION` | High | Verification | Pre-apply regression suite must pass before any cloud mutation is committed to the live environment. |
+| `NO_COMPLETION_WITHOUT_VERIFICATION` | Critical | Verification | An agent run can never report terminal success (`COMPLETED`) without passing independent post-apply verification. |
+| `NO_UNAPPROVED_HIGH_RISK` | High | Risk | High or Critical blast radius changes on sensitive identities require human administrator signoff. |
 
 ---
 
-## 3. Truthful Provider Capability Matrix
+## 4. Multi-Dimensional Blast Radius Assessment
 
-The architecture is provider-agnostic, but provider feature parity is **never falsely assumed**. The system queries machine-readable capability contracts before attempting operations:
+Blast radius is deterministically calculated across **7 distinct architectural dimensions** (`backend/security/blast_radius.py`):
 
-| Capability | AWS | GCP | Azure |
-|---|:---:|:---:|:---:|
-| **Common IAM IR** | ✅ Implemented | ✅ Implemented | ✅ Implemented |
-| **Principal Inspection** | ✅ Implemented | ✅ Implemented | ✅ Implemented |
-| **Policy/Role Inspection** | ✅ Implemented | ✅ Implemented | ✅ Implemented |
-| **Policy Translation (to/from IR)** | ✅ Implemented | ✅ Implemented | ✅ Implemented |
-| **Wildcard Semantics (`*`, `svc:*`)** | ✅ Implemented | ◐ Partial | ◐ Partial |
-| **Local Permission Analysis** | ✅ Implemented | ◐ Partial* | ◐ Partial* |
-| **Counterfactual Pre-Commit Simulation** | ✅ Implemented | — Unsupported | — Unsupported |
-| **Provider-Specific Validation** | ✅ Implemented | ◐ Partial (Bindings) | ◐ Partial (Assignments) |
-| **Provider-Aware Policy Diff** | ✅ Implemented | ✅ Implemented | ✅ Implemented |
-| **Independent Verification** | ✅ Implemented | ◐ Partial | ◐ Partial |
-| **Policy Application** | ✅ Simulated | ◐ Controlled | ◐ Controlled |
-| **Atomic Policy Rollback** | ✅ Implemented | — Unsupported | — Unsupported |
+1. **Volume of Changes**: Absolute count of actions added, removed, or modified.
+2. **Wildcard Analysis**: Detection of wildcards (`*`, `s3:*`, `iam:*`) retained, granted, or pruned.
+3. **Principal Sensitivity**: Standard service principal vs. critical identity (`admin`, root, cross-account roles).
+4. **Resource Scope**: Specific ARNs vs. wildcard resources (`*`).
+5. **Protected Resource Exposure**: Proximity to sensitive assets (`customer-pii`, `audit-trail`).
+6. **Protected Permissions**: Mutation of core administrative or cryptographic actions.
+7. **Architectural Dependencies**: Number of downstream service couplings affected.
 
-*Key:*
-- ✅ **Implemented**: Fully supported in local deterministic engine.
-- ◐ **Partial**: Capability-dependent (schema & binding evaluation without native cloud simulator).
-- — **Unsupported**: Honestly reported as unsupported; triggers safe structured escalation rather than fake output.
+The calculator assigns one of four blast radius tiers:
+- **`LOW`**: Localized changes on standard service principals with high-confidence evidence.
+- **`MEDIUM`**: Multi-permission pruning with verified dependencies across multiple resources.
+- **`HIGH`**: Broad scope changes touching sensitive operational areas or high change volume.
+- **`CRITICAL`**: Retaining global wildcards, sensitive administrative principals, or touching protected resources.
 
 ---
 
-## 4. Common IAM Intermediate Representation (IR)
+## 5. Privilege Expansion & Weakening Detection
 
-All cloud policies, roles, and bindings are modeled through canonical, strongly-typed Pydantic classes in `backend/models/iam.py`:
-
-- **`Provider`**: Enum identifying `AWS`, `GCP`, `AZURE`, `RESTRICTED_MOCK`, `UNKNOWN`.
-- **`CommonPrincipal` (`Principal`)**: Normalized identity spanning AWS roles, GCP service accounts, and Azure service principals.
-- **`CommonAction` (`Action`)**: Granular action descriptor with glob wildcard matching (`matches(action)`).
-- **`CommonResource` (`Resource`)**: Resource ARN/URI with scoping and protected classification flags.
-- **`PolicyEffect` (`Effect`)**: Canonical `ALLOW` or `DENY`.
-- **`CommonCondition` (`Condition`)**: Context keys, operators, and target values.
-- **`CommonScope` (`Scope`)**: Authorization hierarchy boundaries (account, project, subscription, resource group).
-- **`CommonStatement` (`Statement`)**: Canonical permission statements combining Effect, Actions, Resources, Conditions, and Principals.
-- **`CommonBinding` (`Binding`)**: Principal-to-role association (native representation for GCP bindings and Azure role assignments).
-- **`CommonPolicy` (`Policy`)**: Policy document combining statements, bindings, versioning, and vendor metadata.
-- **`provider_metadata`**: Dictionary preserved across all IR models to retain provider-specific attributes without loss of fidelity.
+The expansion analyzer (`backend/security/expansion.py`) verifies that proposed changes are strictly **subsets** of baseline permissions:
+- **Action Expansion**: Detects brand new actions (`new_action_granted:iam:CreateUser`).
+- **Wildcard Expansion**: Detects widening specific permissions to wildcards (`s3:GetObject` $\rightarrow$ `s3:*`).
+- **Resource Scope Expansion**: Detects widening targeted resource ARNs to `*`.
+- **Condition Weakening**: Detects removal or loosening of condition keys (e.g., stripping MFA requirements or IP restrictions).
+- **Scope Widening**: Detects scope escalation across resource groups, subscriptions, or root.
 
 ---
 
-## 5. Multi-Cloud Provider Adapters & Translation
+## 6. Deterministic Policy Regression Test Suite
 
-### AWS Adapter (`AWSProviderAdapter` & `SimulatedAWSProvider`)
-- Translates bidirectional AWS IAM JSON $\leftrightarrow$ Common IR via `aws_policy_to_ir` and `ir_to_aws_policy`.
-- Preserves `Version: "2012-10-17"`, statement `Sid`, `Condition` blocks, and multi-resource definitions.
-- Evaluates wildcards (`*`, `s3:*`, `ec2:Describe*`) using non-naive glob matching rather than simplistic string equality.
-- Powers the full counterfactual simulation, dependency discovery, and rollback engine.
-
-### GCP Adapter (`GCPProviderAdapter` & `SimulatedGCPProvider`)
-- Translates GCP roles and IAM bindings $\leftrightarrow$ Common IR via `gcp_role_to_ir`, `gcp_binding_to_ir`, and `gcp_policy_to_ir`.
-- Respects GCP IAM mechanics: uses etag concurrency rather than revision history.
-- **Truthful capability boundary**: Local simulation and atomic rollback are unsupported. When requested, raises structured `UnsupportedCapabilityError` rather than faking execution.
-
-### Azure Adapter (`AzureProviderAdapter` & `SimulatedAzureProvider`)
-- Translates Azure RBAC Role Definitions and Role Assignments $\leftrightarrow$ Common IR via `azure_role_def_to_ir` and `azure_assignment_to_ir`.
-- Manages Azure scoping (`/subscriptions/...`, `/resourceGroups/...`), `actions`, and `notActions`.
-- Truthfully exposes simulation and rollback as unsupported operations.
-
-### Real Cloud Connector Boundary
-- Clean architectural separation: `SimulatedAWSProvider` vs `RealAWSProvider`, `SimulatedGCPProvider` vs `RealGCPProvider`, `SimulatedAzureProvider` vs `RealAzureProvider`.
-- Live cloud mutation is **disabled by default** (`PermissionError` safety gate), ensuring no unintended cloud changes occur during testing or local development.
+The regression suite (`backend/security/regression.py`) combines both positive and negative validation tests:
+- **Positive Workflow Preservation**: Ensures required business workflows (e.g., `payment_checkout`, encrypted S3 access via `kms:Decrypt`, CloudWatch metric publishing) remain operational.
+- **Negative Security Invariant Tests**:
+  - `deny_iam_administration`: Confirms no administrative IAM actions (`iam:CreateRole`, `iam:*`) are retained.
+  - `deny_global_wildcard`: Confirms global `*` wildcard is strictly eliminated.
+  - `deny_sensitive_dynamodb_pii`: Confirms PII customer tables are protected.
+  - `deny_sensitive_ec2_prod`: Confirms production EC2 admin access is revoked.
+  - `deny_kms_key_deletion`: Confirms key deletion authority is forbidden.
 
 ---
 
-## 6. Provider Mismatch Protection
+## 7. Evidence Sufficiency & Fail-Closed Gate
 
-The Security Kernel and provider translators strictly enforce cloud boundaries:
-- Routing an AWS policy document to an Azure translator raises `ProviderMismatchError`.
-- Evaluating an Azure proposal against an AWS Security Kernel triggers `PROVIDER_MISMATCH` denial:
-```json
-{
-  "error_code": "PROVIDER_MISMATCH",
-  "source_provider": "azure",
-  "target_provider": "aws",
-  "reason": "Cannot apply changes destined for another cloud provider environment",
-  "recommended_action": "Route artifact to 'azure' adapter or convert to 'aws' schema explicitly."
-}
-```
-No silent cross-cloud type coercion is ever permitted.
+Remediating least privilege based solely on access logs is inherently dangerous because background tasks or disaster recovery jobs may run infrequently:
+$$\text{NOT OBSERVED} \neq \text{PROVEN UNNEEDED}$$
+
+The Evidence Gate (`backend/security/evidence_gate.py`) classifies permissions:
+- **`USED`**: Actively observed in CloudTrail logs $\rightarrow$ Pruning forbidden.
+- **`DEPENDENCY_REQUIRED`**: Unlogged, but required by downstream architecture (e.g., S3 SSE KMS decryption) $\rightarrow$ Pruning forbidden.
+- **`PROVEN_UNNEEDED`**: Unobserved AND validated through counterfactual simulation $\rightarrow$ Pruning permitted.
+- **`UNKNOWN`**: Insufficient or ambiguous telemetry $\rightarrow$ **Fails closed**, triggers human escalation.
 
 ---
 
-## 7. Deterministic Security Kernel Authority
+## 8. Verified Rollback & Loop Prevention
 
-The Security Kernel (`backend/security/kernel.py`) remains the final gatekeeper:
-1. **Provider Mismatch Protection**: Rejects artifacts from differing cloud providers.
-2. **Stale State Protection**: Optimistic concurrency detects changed policy versions before apply, triggering automatic refresh and replanning.
-3. **Privilege Expansion Guard**: Rejects proposals attempting to inject permissions not present in baseline roles (`unauthorized_privilege_expansion`).
-4. **Protected Invariants Enforcement**: Prohibits retaining or granting admin wildcards (`iam:*`, `*`, `sts:AssumeRole*`).
-5. **Sensitive Resource Isolation**: Prevents unauthorized access to protected resources.
-6. **Simulation Enforcement**: Blocks unsimulated changes when simulation is supported.
-7. **Risk & Confidence Gating**: Requires high confidence ($\ge 0.90$) and acceptable risk tiers for autonomous authorization.
+### Independent Deterministic Rollback (`ExtendedPolicyVerifier`)
+- If post-apply verification detects workflow failure, the Controller automatically executes `rollback_policy`.
+- **No fake rollback**: The verifier independently inspects the cloud environment to confirm the active policy version is restored to `v1`.
+- Bounded rollback: At most **1 rollback attempt** is permitted. If rollback fails, the system immediately halts and escalates.
 
----
-
-## 8. Provider-Aware Diff, Validation & Verification
-
-### Dual Policy Diff (`PolicyDiff`)
-Every diff presents both:
-1. **Common Semantic Diff**: Provider-neutral list of `REMOVED (-)`, `KEPT (+)`, and `ADDED (+)` permissions with justifications and architectural evidence.
-2. **Provider-Specific Diff**:
-   - AWS: Specific statement actions added or removed (`AWS Statement: AllowRequestedActions`).
-   - GCP: Permissions added or revoked from role definitions and member bindings.
-   - Azure: Actions adjusted in role definitions and assignment scopes.
-
-### Provider-Specific Validation (`backend/security/validator.py`)
-- `validate_common_policy`: Validates invariant IR integrity and privilege non-expansion.
-- `validate_aws_policy`: Validates AWS IAM JSON schema, Action prefixes, and Statement requirements.
-- `validate_gcp_binding`: Validates GCP role formatting (`roles/...`) and member prefixes (`user:`, `serviceAccount:`).
-- `validate_azure_assignment`: Validates subscription scopes and role definition references.
-
-### Multi-Dimensional Verification (`ExtendedPolicyVerifier`)
-Post-remediation verifications independently confirm:
-1. Functional application workflows succeed.
-2. Protected resources remain completely isolated.
-3. Structural active permissions match the approved candidate policy.
-4. Provider compliance (versioning, binding fidelity, provider match).
+### Loop Prevention Guard
+- Tracks repeated failures of identical actions with identical arguments.
+- If an action fails **2 times** (`max_failed_action_repeats = 2`), autonomy halts cleanly with `repeated_failed_actions` rather than looping indefinitely.
 
 ---
 
 ## 9. Demonstrations
 
+Execute all 6 end-to-end demonstrations using the unified CLI or standalone runners:
+
 ### Demo 1: AWS Killer Scenario — Dependency Discovery & Remediation
-Runs the full closed-loop remediation on AWS, discovering hidden KMS encryption dependencies:
+Autonomous remediation on AWS discovering hidden KMS encryption dependencies, adapting the plan, simulating, applying, verifying, and completing:
 ```bash
 python main.py --demo aws
-# or simply:
-python main.py
+# or:
+python backend/demos/demo_aws.py
 ```
 
-### Demo 2: Truthful Unsupported Provider Capability (GCP)
-Demonstrates the agent attempting pre-commit simulation on GCP, which is truthfully reported as unsupported and escalated safely without fake output:
+### Demo 2: Security Kernel Safety Block
+Security Kernel intercepts and blocks an attempt to remove protected administrative permissions (`iam:CreateRole`), preserving state integrity:
+```bash
+python main.py --demo safety-block
+# or:
+python backend/demos/demo_safety_block.py
+```
+
+### Demo 3: Deterministic Automated Rollback
+A flawed policy change breaking KMS decryption is applied to test defense-in-depth verification. Post-apply verification detects the failure and executes verified rollback to `v1`:
+```bash
+python main.py --demo rollback
+# or:
+python backend/demos/demo_rollback.py
+```
+
+### Demo 4: Optimistic Concurrency & Stale State Recovery
+Simulates a concurrent out-of-band modification to the role (`v1` $\rightarrow$ `v2`). The Security Kernel catches `stale_state_detected`, refreshes active state, replans, applies `v3`, and verifies:
+```bash
+python main.py --demo stale-state
+# or:
+python backend/demos/demo_stale_state.py
+```
+
+### Demo 5: Truthful Unsupported Provider Capability (GCP)
+Pre-commit simulation on GCP is truthfully reported as unsupported, safely escalating without fake output:
 ```bash
 python main.py --demo unsupported-gcp
+# or:
+python backend/demos/demo_unsupported_gcp.py
 ```
 
-### Demo 3: Provider Mismatch Protection
-Demonstrates the Security Kernel detecting and blocking an attempt to mutate AWS infrastructure with a foreign Azure artifact:
+### Demo 6: Provider Mismatch Protection
+Cross-cloud contamination is blocked when an Azure policy artifact is routed to an AWS environment:
 ```bash
 python main.py --demo provider-mismatch
-```
-
-All three demos can also be executed via standalone scripts:
-```bash
-python -m backend.demos.demo_aws
-python -m backend.demos.demo_unsupported_gcp
-python -m backend.demos.demo_provider_mismatch
+# or:
+python backend/demos/demo_provider_mismatch.py
 ```
 
 ---
@@ -236,23 +256,26 @@ python -m backend.demos.demo_provider_mismatch
 ```text
 backend/
 ├── agent/
-│   ├── controller.py          # Provider-aware agent loop, budget tracking, capability guards
+│   ├── controller.py          # Authoritative agent loop, bounded budgets, loop prevention, rollback
 │   ├── planner.py             # Explicit versioned remediation plan
 │   ├── reasoner.py            # LLMReasoner, MockReasoner, DeterministicReasoner
 │   ├── decisions.py           # Structured AgentDecision schema
 │   └── budgets.py             # AgentBudget limits and BudgetTracker telemetry
 │
 ├── api/
-│   └── main.py                # FastAPI REST endpoints with multi-cloud provider parameters
+│   └── main.py                # FastAPI REST endpoints with provider parameters
 │
 ├── demos/
-│   ├── demo_aws.py            # Demo 1 standalone script
-│   ├── demo_unsupported_gcp.py# Demo 2 standalone script
-│   └── demo_provider_mismatch.py # Demo 3 standalone script
+│   ├── demo_aws.py            # Demo 1: AWS dependency discovery & success
+│   ├── demo_safety_block.py   # Demo 2: Safety block on protected invariant
+│   ├── demo_rollback.py       # Demo 3: Post-apply verification failure & rollback
+│   ├── demo_stale_state.py    # Demo 4: Optimistic concurrency stale state recovery
+│   ├── demo_unsupported_gcp.py# Demo 5: Truthful unsupported capability
+│   └── demo_provider_mismatch.py # Demo 6: Cross-cloud boundary protection
 │
 ├── models/
 │   ├── schemas.py             # Domain models (Role, Principal, Workflow, etc.)
-│   ├── iam.py                 # Common IAM IR (Provider, Principal, Action, Resource, Scope, Policy, Statement, Binding)
+│   ├── iam.py                 # Common IAM IR (Provider, Principal, Action, Resource, Scope, Policy)
 │   └── evidence.py            # Structured Evidence and EvidenceBundle models
 │
 ├── providers/
@@ -270,12 +293,19 @@ backend/
 │       └── azure.py           # Bidirectional Azure Role Definition/Assignment <-> Common IR translator
 │
 ├── security/
+│   ├── invariants.py          # 11 explicit SecurityInvariants & SecurityDecision schemas
+│   ├── policy_config.py       # SecurityPolicyConfig with autonomy levels (SAFE, ASSISTED, STRICT)
+│   ├── blast_radius.py        # 7-dimension deterministic blast radius assessment
+│   ├── expansion.py           # Privilege expansion & condition weakening detection
+│   ├── regression.py          # PolicyRegressionTest & RegressionTestSuite (positive & negative)
+│   ├── escalation.py          # Structured EscalationRecord & EscalationReason taxonomy
+│   ├── evidence_gate.py       # Evidence sufficiency evaluator & fail-closed gate
 │   ├── analyzer.py            # Evidence bundle analyzer and risk classifier
-│   ├── kernel.py              # Deterministic Security Kernel & multi-cloud gate
-│   ├── diff.py                # Provider-aware policy diff generator (Common + Provider representations)
+│   ├── kernel.py              # Authoritative Security Kernel & invariant gate
+│   ├── diff.py                # Dual policy diff generator (Common + Provider representations)
 │   ├── validator.py           # Provider-specific syntax and invariant validation
 │   ├── dependency.py          # Transitive service dependency graph & tracer
-│   └── verification.py        # Multi-dimensional verification & rollback authority
+│   └── verification.py        # ExtendedPolicyVerifier & independent rollback verification
 │
 ├── state/
 │   ├── models.py              # AgentState & AuditEvent models with provider telemetry and state hashes
@@ -284,7 +314,7 @@ backend/
 └── tools/
     ├── base.py                # BaseTool & ToolResult contracts
     ├── registry.py            # ToolRegistry with risk classifications
-    └── iam_tools.py           # 16 deterministic provider-neutral tools (inspect, simulate, validate, apply, diff, verify)
+    └── iam_tools.py           # Deterministic provider-neutral tools (inspect, simulate, validate, apply, diff, verify)
 ```
 
 ---
@@ -300,14 +330,14 @@ cp .env.example .env
 ```
 
 ### Running the Full Test Suite
-Run the 77-test suite spanning all Phase 1, Phase 2, and Phase 3 specifications:
+Run the **93-test** test suite verifying all Phase 1, Phase 2, Phase 3, and Phase 4 capabilities:
 ```bash
-pytest -q
+pytest -v
 ```
 
 Output:
 ```text
-77 passed, 2 warnings in 1.03s
+======================== 93 passed, 2 warnings in 1.83s ========================
 ```
 
 ### Running the REST API Server
@@ -320,20 +350,13 @@ python -m uvicorn backend.api.main:app --reload
   ```bash
   curl -s http://localhost:8000/health
   ```
-- **Trigger Multi-Cloud Run**:
+- **Trigger Remediation Run**:
   ```bash
   curl -s -X POST http://localhost:8000/api/agent/run \
     -H "Content-Type: application/json" \
     -d '{"goal": "Make PaymentServiceRole least privilege.", "role_id": "PaymentServiceRole", "provider": "aws"}'
   ```
-- **Inspect Completed Run by ID**:
+- **Inspect Run State & Audit Log**:
   ```bash
   curl -s http://localhost:8000/api/agent/run/<run_id>
   ```
-
----
-
-## 12. Known Limitations & Honest Boundaries
-
-> **The architecture is provider-agnostic, but provider feature parity is intentionally not assumed.**  
-> AWS has the strongest deterministic counterfactual simulation and rollback path in the current implementation. GCP and Azure adapters preserve provider-specific IAM concepts (roles, bindings, role definitions, role assignments) and capability differences, while unsupported operations safely escalate instead of being simulated falsely. Live production cloud mutation remains disabled by default.
