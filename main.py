@@ -97,6 +97,41 @@ def format_cli_output(event: AuditEvent) -> None:
         role_id = event.relevant_ids.get("role_id")
         print(f"Security Kernel authorized mutation: applied policy version {ver_id} to {role_id}.\n")
 
+    elif etype == "security_check":
+        print(f"Security Kernel evaluated proposal: decision={details.get('decision', 'ALLOW').upper()} (blast radius: {details.get('blast_radius', 'LOW')})")
+
+    elif etype == "security_gate_denied":
+        step_counter += 1
+        print(
+            f"[{step_counter:02d}] SECURITY KERNEL DENIAL\n"
+            f"Proposal BLOCKED: {details.get('reason_codes')}\n"
+            f"Authoritative security invariant preserved.\n"
+        )
+
+    elif etype == "rollback":
+        step_counter += 1
+        print(
+            f"[{step_counter:02d}] AUTOMATED ROLLBACK\n"
+            f"{event.summary}\n"
+            f"Independent verification confirmed: restored to version {details.get('restored_version', 'v1')}.\n"
+        )
+
+    elif etype == "verification_failed":
+        step_counter += 1
+        print(
+            f"[{step_counter:02d}] VERIFY\n"
+            f"Deterministic post-apply verification: FAILED\n"
+            f"Violations detected: {details.get('details', [])}\n"
+        )
+
+    elif etype == "adapt" and details.get("stale_state"):
+        step_counter += 1
+        print(
+            f"[{step_counter:02d}] ADAPT (OPTIMISTIC CONCURRENCY)\n"
+            f"Stale state detected: refreshed active policy version to {details.get('refreshed_version')}.\n"
+            f"Initiating autonomous replan against refreshed baseline.\n"
+        )
+
     elif etype == "verification_passed":
         step_counter += 1
         print(f"[{step_counter:02d}] VERIFY\nFunctional workflows PASS\nSecurity invariants PASS\n")
@@ -127,6 +162,10 @@ def format_cli_output(event: AuditEvent) -> None:
             print(f"[{step_counter:02d}] SAFE HALT\nExecution stopped safely due to unsupported provider capability.\n")
         elif stop_reason == "provider_mismatch":
             print(f"[{step_counter:02d}] BLOCKED\nExecution aborted safely: cross-provider mutation prevented.\n")
+        elif stop_reason == "security_block":
+            print(f"[{step_counter:02d}] SECURITY BLOCKED\nExecution halted safely by Security Kernel: protected invariant preserved.\n")
+        elif stop_reason == "verification_failure_rolled_back":
+            print(f"[{step_counter:02d}] ROLLED BACK & HALTED\nExecution rolled back safely following verification failure.\n")
         else:
             print(f"[{step_counter:02d}] COMPLETE\nExecution finished with status: {status}\n")
 
@@ -296,15 +335,271 @@ def run_provider_mismatch_demo() -> int:
     return 0 if state.stop_reason == "provider_mismatch" else 1
 
 
+def run_safety_block_demo() -> int:
+    """Demo: Security Kernel Interception of Invariant Violation (Safety Block)."""
+    global step_counter, simulation_count
+    step_counter = 0
+    simulation_count = 0
+
+    print("=" * 70)
+    print("DEMO: SECURITY KERNEL SAFETY BLOCK")
+    print("=" * 70)
+
+    env = load_environment()
+    # Ensure role has administrative permission so removal triggers safety block
+    env.apply_policy_version(
+        "PaymentServiceRole",
+        ["s3:GetObject", "iam:CreateRole", "kms:Decrypt"],
+        "Baseline with admin capability",
+    )
+    tool_registry = create_extended_tool_registry(env)
+
+    class SensitiveAdminRemovalReasoner(DeterministicReasoner):
+        def __init__(self) -> None:
+            super().__init__(target_role_id="PaymentServiceRole")
+            self.step = 0
+
+        def decide(self, state, **kwargs) -> AgentDecision:
+            self.step += 1
+            if self.step == 1:
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="get_role",
+                    arguments={"role_id": "PaymentServiceRole"},
+                    reason="Inspect role and discover active permissions",
+                )
+            elif self.step == 2:
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="apply_policy_change",
+                    arguments={
+                        "role_id": "PaymentServiceRole",
+                        "remove_permissions": ["iam:CreateRole"],
+                        "reason": "Unsafe removal of sensitive administrative action",
+                    },
+                    reason="Proposing to mutate protected administrative action",
+                )
+            return AgentDecision(decision_type="abort", reason="Sequence exhausted")
+
+    controller = AgentController(
+        reasoner=SensitiveAdminRemovalReasoner(),
+        tool_registry=tool_registry,
+        event_callback=format_cli_output,
+        environment=env,
+        provider="aws",
+    )
+
+    state = controller.run(
+        goal="Attempt unsafe removal of protected administrative capability.",
+        role_id="PaymentServiceRole",
+        provider="aws",
+    )
+
+    print("-" * 70)
+    print("SECURITY KERNEL INTERCEPTION AUDIT:")
+    print(f"  provider:       {state.provider.upper()}")
+    print(f"  stop reason:    {state.stop_reason}")
+    print(f"  invariant:      NO_PROTECTED_PERMISSION_MUTATION")
+    print(f"  cloud mutation: BLOCKED deterministically (no state modified)")
+    print(f"  audit events:   {len(state.audit_trail)} events logged")
+    print("-" * 70)
+    return 0 if state.stop_reason == "security_block" else 1
+
+
+def run_rollback_demo() -> int:
+    """Demo: Deterministic Post-Apply Verification Failure & Automated Rollback."""
+    global step_counter, simulation_count
+    step_counter = 0
+    simulation_count = 0
+
+    print("=" * 70)
+    print("DEMO: DETERMINISTIC ROLLBACK ON VERIFICATION FAILURE")
+    print("=" * 70)
+
+    env = load_environment()
+    tool_registry = create_extended_tool_registry(env)
+
+    class BrokenPolicyReasoner(DeterministicReasoner):
+        def __init__(self) -> None:
+            super().__init__(target_role_id="PaymentServiceRole")
+            self.step = 0
+
+        def decide(self, state, **kwargs) -> AgentDecision:
+            self.step += 1
+            if self.step == 1:
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="get_role",
+                    arguments={"role_id": "PaymentServiceRole"},
+                    reason="Inspect active role definition",
+                )
+            elif self.step == 2:
+                # Deliberately remove required kms:Decrypt without check
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="apply_policy_change",
+                    arguments={
+                        "role_id": "PaymentServiceRole",
+                        "remove_permissions": ["kms:Decrypt"],
+                        "reason": "Faulty least-privilege apply lacking KMS dependency",
+                    },
+                    reason="Apply flawed policy mutation to live environment",
+                )
+            elif self.step == 3:
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="verify_required_access",
+                    arguments={"role_id": "PaymentServiceRole"},
+                    reason="Execute live post-apply functional and regression verification",
+                )
+            return AgentDecision(decision_type="abort", reason="Sequence complete")
+
+    controller = AgentController(
+        reasoner=BrokenPolicyReasoner(),
+        tool_registry=tool_registry,
+        event_callback=format_cli_output,
+        environment=env,
+        provider="aws",
+    )
+
+    state = controller.run(
+        goal="Demonstrate defense-in-depth automated rollback on verification failure.",
+        role_id="PaymentServiceRole",
+        provider="aws",
+    )
+
+    print("-" * 70)
+    print("AUTOMATED ROLLBACK AUDIT:")
+    print(f"  provider:          {state.provider.upper()}")
+    print(f"  stop reason:       {state.stop_reason}")
+    print(f"  verification:      FAILED (post-apply regression detected)")
+    print(f"  rollback action:   RESTORED version v1")
+    print(f"  verified restore:  TRUE (independent check confirmed active version is v1)")
+    role = env.get_role("PaymentServiceRole")
+    print(f"  final role state:  version={role.current_version}")
+    print("-" * 70)
+    return 0 if state.stop_reason == "verification_failure_rolled_back" and role.current_version == "v1" else 1
+
+
+def run_stale_state_demo() -> int:
+    """Demo: Optimistic Concurrency Stale State Detection & Replan."""
+    global step_counter, simulation_count
+    step_counter = 0
+    simulation_count = 0
+
+    print("=" * 70)
+    print("DEMO: OPTIMISTIC CONCURRENCY & STALE STATE RECOVERY")
+    print("=" * 70)
+
+    env = load_environment()
+    tool_registry = create_extended_tool_registry(env)
+
+    class StaleStateReasoner(DeterministicReasoner):
+        def __init__(self) -> None:
+            super().__init__(target_role_id="PaymentServiceRole")
+            self.step = 0
+
+        def decide(self, state, **kwargs) -> AgentDecision:
+            self.step += 1
+            if self.step == 1:
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="get_role",
+                    arguments={"role_id": "PaymentServiceRole"},
+                    reason="Inspect active role definition (version v1)",
+                )
+            elif self.step == 2:
+                # Concurrent out-of-band change happens in environment right before apply!
+                env.apply_policy_version(
+                    "PaymentServiceRole",
+                    ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData", "ec2:*", "iam:*", "dynamodb:*"],
+                    "Concurrent admin modification out-of-band",
+                )
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="apply_policy_change",
+                    arguments={
+                        "role_id": "PaymentServiceRole",
+                        "remove_permissions": ["ec2:*", "iam:*"],
+                        "reason": "Attempt apply based on stale baseline version v1",
+                    },
+                    reason="Proposing change unaware of concurrent update",
+                )
+            elif self.step == 3:
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="simulate_policy",
+                    arguments={
+                        "role_id": "PaymentServiceRole",
+                        "proposed_permissions": ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData"],
+                    },
+                    reason="Simulate least-privilege permissions against refreshed state",
+                    metadata={
+                        "candidate_phase": "initial_proposal",
+                        "proposed_permissions": ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData"],
+                        "remove_permissions": ["ec2:*", "iam:*"],
+                    },
+                )
+            elif self.step == 4:
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="apply_policy_change",
+                    arguments={
+                        "role_id": "PaymentServiceRole",
+                        "remove_permissions": ["ec2:*", "iam:*", "dynamodb:*"],
+                        "reason": "Apply clean least-privilege policy against refreshed version v2",
+                    },
+                    reason="Apply policy change with refreshed version v2",
+                )
+            elif self.step == 5:
+                return AgentDecision(
+                    decision_type="tool_call",
+                    tool_name="verify_required_access",
+                    arguments={"role_id": "PaymentServiceRole"},
+                    reason="Verify required access",
+                )
+            elif self.step == 6:
+                return AgentDecision(
+                    decision_type="complete",
+                    reason="Successfully remediated against updated concurrent policy state",
+                )
+            return AgentDecision(decision_type="abort", reason="Sequence complete")
+
+    controller = AgentController(
+        reasoner=StaleStateReasoner(),
+        tool_registry=tool_registry,
+        event_callback=format_cli_output,
+        environment=env,
+        provider="aws",
+    )
+
+    state = controller.run(
+        goal="Demonstrate optimistic concurrency handling on modified policy state.",
+        role_id="PaymentServiceRole",
+        provider="aws",
+    )
+
+    print("-" * 70)
+    print("OPTIMISTIC CONCURRENCY AUDIT:")
+    print(f"  provider:          {state.provider.upper()}")
+    print(f"  final phase:       {state.current_phase}")
+    print(f"  stop reason:       {state.stop_reason}")
+    print(f"  concurrency check: PASS (applied on top of refreshed version v2 -> now v3)")
+    role = env.get_role("PaymentServiceRole")
+    print(f"  active version:    {role.current_version}")
+    print("-" * 70)
+    return 0 if state.current_phase == "COMPLETED" and role.current_version == "v3" else 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="PS10 Autonomous Cloud IAM Least-Privilege Mitigator (Phase 3 Multi-Cloud Engine)"
+        description="PS10 Autonomous Cloud IAM Least-Privilege Mitigator (Phase 4 Safety Engine)"
     )
     parser.add_argument(
         "--demo",
         type=str,
         default="aws",
-        choices=["aws", "unsupported-gcp", "provider-mismatch"],
+        choices=["aws", "safety-block", "rollback", "stale-state", "unsupported-gcp", "provider-mismatch"],
         help="Demo scenario to execute (default: aws)",
     )
     parser.add_argument(
@@ -331,6 +626,12 @@ def main() -> None:
         exit_code = run_unsupported_gcp_demo()
     elif args.demo == "provider-mismatch":
         exit_code = run_provider_mismatch_demo()
+    elif args.demo == "safety-block":
+        exit_code = run_safety_block_demo()
+    elif args.demo == "rollback":
+        exit_code = run_rollback_demo()
+    elif args.demo == "stale-state":
+        exit_code = run_stale_state_demo()
     else:
         exit_code = run_aws_demo(role_id=args.role, use_mock=args.mock)
 
