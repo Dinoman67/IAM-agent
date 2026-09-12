@@ -27,6 +27,7 @@ from backend.providers.capabilities import (
 )
 from backend.security.attack_graph import compute_attack_graph, paths_blocked
 from backend.security.compliance import build_compliance_report
+from backend.security.duel import run_duel
 from backend.security.temporal import classify_permissions
 from backend.scenarios import (
     BrokenPolicyReasoner,
@@ -669,6 +670,22 @@ def export_policy_as_code(format: str = "all") -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="format must be rego, cedar, or all")
     out["evaluate"] = "opa eval -d iam.rego -i tfplan.json 'data.iam.least_privilege.deny'"
     return out
+
+
+class DuelRequest(BaseModel):
+    role_id: str = "PaymentServiceRole"
+    before_permissions: Optional[List[str]] = None
+    after_permissions: Optional[List[str]] = None
+
+
+@app.post("/api/duel")
+def attacker_duel(req: DuelRequest) -> Dict[str, Any]:
+    """Red-team climax: same stolen credential vs old policy and new policy."""
+    env = load_environment()
+    try:
+        return run_duel(req.role_id, env, req.before_permissions, req.after_permissions).model_dump()
+    except ValueError as ex:
+        raise HTTPException(status_code=404, detail=str(ex))
 
 
 class DriftCheckRequest(BaseModel):

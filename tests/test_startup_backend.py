@@ -116,3 +116,37 @@ def test_api_key_guard(monkeypatch):
     r = client.post("/api/agent/run", json={"scenario": "aws", "use_mock": True}, headers={"x-api-key": "secret123"})
     assert r.status_code == 200
     assert client.get("/api/fleet/risks").status_code == 200  # reads stay open
+
+
+def test_attacker_duel():
+    from starlette.testclient import TestClient
+    from backend.api.main import app
+
+    client = TestClient(app)
+    r = client.post(
+        "/api/duel",
+        json={
+            "role_id": "PaymentServiceRole",
+            "after_permissions": ["s3:GetObject", "s3:PutObject", "kms:Decrypt", "cloudwatch:PutMetricData"],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["before"]["verdict"] == "BREACHED"
+    assert len(body["before"]["reachable_protected"]) >= 1
+    assert body["after"]["verdict"] == "HELD"
+    assert len(body["protected_saved"]) >= 1
+    assert "OLD key card" in body["headline"]
+    # Identical policies → honest no-duel message
+    r2 = client.post("/api/duel", json={"role_id": "PaymentServiceRole"})
+    assert "run remediation first" in r2.json()["headline"]
+    assert client.post("/api/duel", json={"role_id": "NOPE"}).status_code == 404
+
+
+def test_duel_tool_registered():
+    from backend.tools.iam_tools import create_extended_tool_registry
+
+    reg = create_extended_tool_registry(load_environment())
+    res = reg.execute("run_attacker_duel", {"role_id": "PaymentServiceRole"})
+    assert res.success is True
+    assert res.data["before"]["verdict"] == "BREACHED"

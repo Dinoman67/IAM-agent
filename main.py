@@ -493,6 +493,11 @@ def main() -> None:
         default=None,
         help="Export kernel invariants as OPA Rego to file (e.g. --export-rego iam.rego)",
     )
+    parser.add_argument(
+        "--duel",
+        action="store_true",
+        help="Run attacker duel: stolen credential vs old and new policy",
+    )
 
     args = parser.parse_args()
 
@@ -533,6 +538,16 @@ def main() -> None:
         with open(args.export_rego, "w", encoding="utf-8") as fh:
             fh.write(_rego())
         print(f"Wrote OPA Rego to {args.export_rego}")
+        sys.exit(0)
+    if args.duel:
+        from backend.environment.loader import load_environment as _load5
+        from backend.security.duel import run_duel as _duel
+
+        d = _duel(args.role, _load5())
+        print(f"ATTACKER DUEL — {args.role}")
+        print(f"  BEFORE (v1): {d.before.verdict} — protected reachable: {d.before.reachable_protected}")
+        print(f"  AFTER:       {d.after.verdict} — protected reachable: {d.after.reachable_protected}")
+        print(f"  {d.headline}")
         sys.exit(0)
     if args.export_tf:
         from backend.environment.loader import load_environment as _load3

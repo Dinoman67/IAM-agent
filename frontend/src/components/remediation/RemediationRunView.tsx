@@ -25,6 +25,7 @@ import { DependencyGraph } from '../dependency/DependencyGraph';
 import { PolicyDiffView } from '../policy/PolicyDiffView';
 import { TerraformExportCard } from '../policy/TerraformExportCard';
 import { AttackGraphView } from '../security/AttackGraph';
+import { AttackerDuel } from '../security/AttackerDuel';
 import { TemporalPanel } from '../evidence/TemporalPanel';
 import { SecurityAssessmentCard } from '../security/SecurityAssessmentCard';
 import { SecurityKernelPanel } from '../security/SecurityKernelPanel';
@@ -81,6 +82,47 @@ export const RemediationRunView: React.FC<RemediationRunViewProps> = ({ run, onR
     run.stop_reason === 'verification_failure_rolled_back' ||
     visibleEvents.some((e) => e.event_type === 'rollback');
   const isCompleted = run.status === 'completed' && !isBlocked && !isRollback;
+
+  // Narrated story strip: plain-English "why" for each phase, derived from the run itself.
+  const diff: any = run.policy_diff || {};
+  const kept: string[] = diff.kept || [];
+  const removed: string[] = diff.removed || [];
+  const added: string[] = diff.added || [];
+  const afterPermissions = kept.length || added.length ? [...kept, ...added] : undefined;
+  const simFail = visibleEvents.find((e) => e.event_type === 'simulation_failed');
+  const simFailWf = (simFail?.details as any)?.failed_workflow || 'payment_checkout';
+  const simFailPerm = (simFail?.details as any)?.missing_permission || 'kms:Decrypt';
+  const observedCount = kept.length + removed.length || 7;
+  const storySteps = [
+    { n: '1', title: `Saw ${observedCount} permissions`, why: 'Listed everything the key card opens.' },
+    {
+      n: '2',
+      title: simFail ? `Sim failed: ${simFailWf} needs ${simFailPerm}` : 'Simulated every cut',
+      why: 'Rehearsed removal before touching anything real.',
+    },
+    {
+      n: '3',
+      title: hasReplan ? 'Found hidden coupling S3→KMS' : 'Checked hidden couplings',
+      why: 'Encrypted receipts need decryption — zero logs, still required.',
+    },
+    {
+      n: '4',
+      title: removed.length ? `Cut ${removed.length}, kept ${kept.length}` : 'Proposed least privilege',
+      why: removed.length ? `Removed ${removed.join(', ')}.` : 'Wide grants proposed for removal.',
+    },
+    {
+      n: '5',
+      title:
+        run.verification_result?.passed || isCompleted
+          ? 'Verified: zero regression'
+          : isBlocked
+          ? 'Blocked by safety kernel'
+          : isRollback
+          ? 'Rolled back safely'
+          : 'Awaiting verification',
+      why: 'Independent checker confirms; kernel has final veto.',
+    },
+  ];
 
   // Derive current phase
   let currentPhase = 'OBSERVING';
@@ -210,8 +252,25 @@ export const RemediationRunView: React.FC<RemediationRunViewProps> = ({ run, onR
         isCompleted={isCompleted}
       />
 
-      {/* Safety Blocked State Alert if Triggered */}
-      {isBlocked && (
+      {/* Narrated story: why each step happened, in plain English */}
+      {visibleEvents.length > 1 && (
+        <div className="rounded-lg bg-soc-card/60 border border-soc-border p-3">
+          <div className="text-[10px] font-mono font-bold text-slate-500 uppercase mb-2">
+            The story so far — why each step happened
+          </div>
+          <ol className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+            {storySteps.map((s) => (
+              <li key={s.n} className="rounded-md bg-slate-950/60 border border-soc-border p-2">
+                <div className="text-[10px] font-mono font-bold text-sky-300">STEP {s.n}</div>
+                <div className="text-[11px] font-semibold text-slate-100 mt-0.5">{s.title}</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">{s.why}</div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Safety Blocked State Alert if Triggered */}      {isBlocked && (
         <BlockedStateView
           stopReason={run.stop_reason || 'security_block'}
           reasonText={
@@ -333,6 +392,8 @@ export const RemediationRunView: React.FC<RemediationRunViewProps> = ({ run, onR
             <AttackGraphView roleId={run.role_id || 'PaymentServiceRole'} />
             <TemporalPanel roleId={run.role_id || 'PaymentServiceRole'} />
           </div>
+
+          <AttackerDuel roleId={run.role_id || 'PaymentServiceRole'} afterPermissions={afterPermissions} />
 
           <TerraformExportCard roleId={run.role_id || 'PaymentServiceRole'} />
 

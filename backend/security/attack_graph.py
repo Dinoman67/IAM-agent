@@ -56,7 +56,15 @@ def compute_attack_graph(role_id: str, env: IAMEnvironment) -> AttackGraph:
     role = env.get_role(role_id)
     if not role:
         raise ValueError(f"Role '{role_id}' not found.")
-    perms = role.active_permissions()
+    return compute_attack_graph_for_permissions(role_id, role.active_permissions(), env)
+
+
+def compute_attack_graph_for_permissions(
+    role_id: str, perms: List[str], env: IAMEnvironment
+) -> AttackGraph:
+    role = env.get_role(role_id)
+    if not role:
+        raise ValueError(f"Role '{role_id}' not found.")
     resources = list(env.data.resources)
 
     perm_risk = {p.id: p.risk_level for p in env.data.permissions}
@@ -137,4 +145,4 @@ def paths_blocked(original: AttackGraph, proposed_permissions: List[str], env: I
     return blocked
 
 
-__all__ = ["AttackGraph", "AttackNode", "AttackEdge", "AttackPath", "compute_attack_graph", "paths_blocked"]
+__all__ = ["AttackGraph", "AttackNode", "AttackEdge", "AttackPath", "compute_attack_graph", "compute_attack_graph_for_permissions", "paths_blocked"]
