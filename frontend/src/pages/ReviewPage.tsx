@@ -33,10 +33,12 @@ function haltedAt(run: AgentRunResponse | null): string {
 
 export const ReviewPage: React.FC<ReviewPageProps> = ({ summaries, onReviewed, onViewRun }) => {
   // Single review: the latest halted run only. No queue, no history.
+  // summaries[0] is the latest run of any kind (backend returns newest first).
   const latestId = useMemo(() => {
     const halted = summaries.filter((r) => isHaltedRun(r.stop_reason));
     return halted[0]?.run_id ?? null;
   }, [summaries]);
+  const latestRun = summaries.length > 0 ? summaries[0] : null;
   const [detail, setDetail] = useState<AgentRunResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastEntry, setLastEntry] = useState<Entry | null>(null);
@@ -140,6 +142,29 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({ summaries, onReviewed, o
           Only halted runs appear here — successes never notify. Approvals execute a real
           override run; load-bearing denials refuse deterministically.
         </p>
+
+        {/* last run of any kind — so the page always names what just happened */}
+        {latestRun && (
+          <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-white/10 bg-white/[0.02] px-4 py-3">
+            <span className="text-[11px] font-mono tracking-[0.2em] text-slate-500">LAST RUN</span>
+            {latestRun.verified ? (
+              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-mono font-bold text-emerald-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                Verified success
+              </span>
+            ) : (
+              <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-mono font-bold ${kindOf(latestRun.stop_reason).chip}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${kindOf(latestRun.stop_reason).dot}`} />
+                {kindOf(latestRun.stop_reason).label}
+              </span>
+            )}
+            <span className="font-mono text-sm text-slate-200">{latestRun.run_id}</span>
+            <span className="font-mono text-sm text-slate-400">{latestRun.role_id}</span>
+            {!isHaltedRun(latestRun.stop_reason) && (
+              <span className="font-mono text-xs text-slate-500">· nothing to review</span>
+            )}
+          </div>
+        )}
 
         {!latestId ? (
           <div className="mt-10 text-center">
