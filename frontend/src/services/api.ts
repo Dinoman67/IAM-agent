@@ -14,7 +14,7 @@ import {
   Workflow,
 } from '../types';
 
-const API_BASE = '';
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
 
 export interface PrincipalsResponse {
   principals: Principal[];
