@@ -11,6 +11,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { AgentRunResponse, DemoScenario, Role } from '../types';
+import { exportTerraform, getAuditBundle } from '../services/api';
 import { GalaxyBg } from '../components/decor/GalaxyBg';
 
 interface SimulationPageProps {
@@ -287,11 +288,17 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
   const [kernelLog, setKernelLog] = useState<KernelEntry[]>([]);
   const [kernelInput, setKernelInput] = useState('');
   const [kernelVerdict, setKernelVerdict] = useState<KernelVerdict | null>(null);
+  const [evidencePerm, setEvidencePerm] = useState<string | null>(null);
+  const [dlBusy, setDlBusy] = useState<string | null>(null);
+  const [dlError, setDlError] = useState<string | null>(null);
   useEffect(() => {
     setReveal(0);
     setKernelLog([]);
     setKernelInput('');
     setKernelVerdict(null);
+    setEvidencePerm(null);
+    setDlBusy(null);
+    setDlError(null);
     if (!currentRun) return;
     const t = setInterval(() => {
       setReveal((r) => {
@@ -413,6 +420,46 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
   const submitKernel = () => {
     runKernelCmd(kernelInput);
     setKernelInput('');
+  };
+
+  const saveBlob = (filename: string, text: string, mime: string) => {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const downloadRunFile = async (kind: 'policy' | 'audit' | 'terraform') => {
+    if (!currentRun || dlBusy) return;
+    setDlBusy(kind);
+    setDlError(null);
+    try {
+      const roleId = currentRun.role_id ?? 'role';
+      if (kind === 'policy') {
+        if (!currentRun.policy_diff) throw new Error('No policy diff on this run.');
+        saveBlob(`${roleId}-least-privilege-policy.json`, JSON.stringify(currentRun.policy_diff, null, 2), 'application/json');
+      } else if (kind === 'audit') {
+        const bundle = await getAuditBundle(currentRun.run_id);
+        saveBlob(`audit-bundle-${currentRun.run_id}.json`, JSON.stringify(bundle, null, 2), 'application/json');
+      } else {
+        // Export the REMEDIATED set from this run, not the live broad policy:
+        // each API call loads a fresh environment, so omitting permissions
+        // would snapshot the un-remediated baseline.
+        const pd = currentRun.policy_diff;
+        const proposed = pd ? [...(pd.kept ?? []), ...(pd.added ?? [])] : undefined;
+        const tf = await exportTerraform(roleId, proposed && proposed.length ? proposed : undefined);
+        saveBlob(`${roleId}-least-privilege.tf`, tf.hcl, 'text/plain');
+      }
+    } catch (e: any) {
+      setDlError(e?.message ?? 'Download failed');
+    } finally {
+      setDlBusy(null);
+    }
   };
 
   const showResult = showResultPre && kernelVerdict !== null;
@@ -797,9 +844,19 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {removed.map((p) => (
-                      <code key={p} className="text-[11px] font-mono text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded px-1.5 py-0.5">
+                      <button
+                        key={p}
+                        type="button"
+                        title="Click for evidence"
+                        onClick={() => setEvidencePerm((s) => (s === p ? null : p))}
+                        className={`text-[11px] font-mono rounded px-1.5 py-0.5 border transition-colors cursor-pointer ${
+                          evidencePerm === p
+                            ? 'text-rose-200 bg-rose-500/20 border-rose-400/50'
+                            : 'text-rose-300 bg-rose-500/10 border-rose-500/20 hover:border-rose-400/50'
+                        }`}
+                      >
                         {p}
-                      </code>
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -809,12 +866,34 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {kept.map((p) => (
-                      <code key={p} className="text-[11px] font-mono text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded px-1.5 py-0.5">
+                      <button
+                        key={p}
+                        type="button"
+                        title="Click for evidence"
+                        onClick={() => setEvidencePerm((s) => (s === p ? null : p))}
+                        className={`text-[11px] font-mono rounded px-1.5 py-0.5 border transition-colors cursor-pointer ${
+                          evidencePerm === p
+                            ? 'text-emerald-200 bg-emerald-500/20 border-emerald-400/50'
+                            : 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20 hover:border-emerald-400/50'
+                        }`}
+                      >
                         {p}
-                      </code>
+                      </button>
                     ))}
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* per-change evidence — click any permission chip */}
+            {evidencePerm && diff && (
+              <div className="mt-3 rounded-lg border border-white/15 bg-white/[0.03] p-4 animate-rise-in">
+                <div className="text-[10px] font-mono tracking-[0.2em] text-slate-500">
+                  EVIDENCE · <span className="text-slate-200">{evidencePerm}</span>
+                </div>
+                <p className="mt-1.5 text-[13px] text-slate-300 leading-relaxed">
+                  {diff.why_removed?.[evidencePerm] ?? diff.why_kept?.[evidencePerm] ?? 'No recorded justification.'}
+                </p>
               </div>
             )}
 
@@ -847,6 +926,30 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
                 + (currentRun.telemetry?.runtime_ms != null ? ` · ${currentRun.telemetry.runtime_ms}ms` : '')
                 + ` · ${currentRun.run_id}`}
             </div>
+
+            {/* take-home artifacts — real files from live endpoints */}
+            <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
+              {[
+                { kind: 'policy' as const, label: 'policy.json', enabled: !!currentRun.policy_diff },
+                { kind: 'audit' as const, label: 'audit-bundle.json', enabled: true },
+                { kind: 'terraform' as const, label: 'policy.tf', enabled: true },
+              ].map(({ kind, label, enabled }) => (
+                <button
+                  key={kind}
+                  type="button"
+                  disabled={!enabled || dlBusy !== null}
+                  onClick={() => downloadRunFile(kind)}
+                  title={enabled ? `Download ${label}` : 'Not available for this run outcome'}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/15 hover:border-sky-400/60 hover:text-sky-200 text-slate-300 text-[11px] font-mono transition-colors cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                >
+                  {dlBusy === kind ? <Loader2 className="w-3 h-3 animate-spin" /> : <span aria-hidden>↓</span>}
+                  {label}
+                </button>
+              ))}
+            </div>
+            {dlError && (
+              <p className="mt-2 text-center text-[11px] font-mono text-rose-400">{dlError}</p>
+            )}
 
             <div className="mt-6 text-center">
               <button

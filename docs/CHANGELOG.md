@@ -10,6 +10,9 @@
   interpreter (`help/status/invariants/diff/allow/deny/escalate/ack`),
   verdicts gated behind kernel entry, scenario explainer cards, shared
   dotted-galaxy backdrop. No new dependencies; CSS-only motion.
+- Evidence per change: REMOVED/KEPT chips expand to recorded justifications.
+- Take-home artifacts: `policy.json`, `audit-bundle.json`, `policy.tf`
+  downloads wired to live endpoints on every completed run.
 - Removed: header nav, onboarding modals/tours, dashboard/learn/audit/
   capabilities pages (left unrouted on disk), marketing-style landing sections.
 
