@@ -15,9 +15,8 @@ services:
         value: memory
       - key: RATE_LIMIT_PER_MIN
         value: "30"
-      # Set after first deploy is not needed — same-origin not used here.
-      # IMPORTANT: set ALLOWED_ORIGINS to your frontend Space URL, e.g.:
-      # - key: ALLOWED_ORIGINS
-      #   value: https://Dinoman1221-prune-iam-console.hf.space
+      # Frontend lives on HF Static; the exact static.hf.space origin is required.
+      - key: ALLOWED_ORIGINS
+        value: https://dinoman1221-prune-iam-console.static.hf.space
       - key: PYTHON_VERSION
         value: 3.12.12
