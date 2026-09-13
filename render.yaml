@@ -15,8 +15,8 @@ services:
         value: memory
       - key: RATE_LIMIT_PER_MIN
         value: "30"
-      # Frontend lives on HF Static; the exact static.hf.space origin is required.
+      # Allow Cloudflare Pages and all client origins
       - key: ALLOWED_ORIGINS
-        value: https://dinoman1221-prune-iam-console.static.hf.space
+        value: "*"
       - key: PYTHON_VERSION
-        value: 3.12.12
+        value: 3.11.10
