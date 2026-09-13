@@ -17,7 +17,8 @@
 - Evidence/Policy/Exports views read the shared run (or preview); Audit lists
   run history lazily and previews read-only.
 - Removed: header nav, onboarding modals/tours, dashboard/learn/capabilities
-  pages (left unrouted on disk), marketing-style landing sections.
+  pages (left unrouted on disk; AuditPage rewritten for the rail),
+  marketing-style landing sections.
 
 ### Backend — GCP local evaluation
 - New GCP seed (`BillingExportSA`, CMEK coupling, protected resources).

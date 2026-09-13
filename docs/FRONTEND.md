@@ -61,6 +61,8 @@ truthful-escalation demo but is unwired from the picker.)
   `src/services/api.ts` is the only fetch layer.
 - `SimulationPage.buildProcLines` maps raw audit event types to log lines —
   new backend event types need a case here or they stay silent.
-- `tsc` runs as part of `npm run build`; `noUnusedLocals` is off, so unrouted
-  legacy components (dashboard/learn/audit/…) compile harmlessly on disk.
+- Legacy `DashboardPage`/`LearnPage`/`CapabilitiesPage` and onboarding/exec
+  components remain unrouted on disk (`AuditPage.tsx` was rewritten in place
+  for the rail). `tsc` runs as part of `npm run build`; `noUnusedLocals` is
+  off, so unrouted legacy components compile harmlessly.
 - Cache discipline: content-hashed bundles — always hard-refresh after rebuilds.
