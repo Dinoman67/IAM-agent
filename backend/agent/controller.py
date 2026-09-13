@@ -354,6 +354,10 @@ class AgentController:
                     canonical_tool_name = "get_role"
                 elif tool_name in ("simulate_policy_change", "simulate_change", "simulate_policy"):
                     canonical_tool_name = "simulate_policy"
+                elif tool_name in ("evaluate_local_policy",):
+                    # Local sandbox evaluation keeps its own canonical name so the
+                    # capability guard checks local-evaluation support (not native sim).
+                    canonical_tool_name = "evaluate_local_policy"
                 elif tool_name in ("rollback_policy_change", "rollback_change", "rollback_policy"):
                     canonical_tool_name = "rollback_policy"
                 elif tool_name in ("inspect_principal", "get_principal"):
@@ -437,7 +441,7 @@ class AgentController:
                         actor="agent",
                     )
 
-                if canonical_tool_name == "simulate_policy":
+                if canonical_tool_name in ("simulate_policy", "evaluate_local_policy"):
                     state.current_phase = "SIMULATING"
                     self._emit_event(
                         state=state,
@@ -722,7 +726,7 @@ class AgentController:
                             actor="agent",
                             evidence_refs=[d.get("required_permission", "") for d in deps],
                         )
-                    elif canonical_tool_name == "simulate_policy":
+                    elif canonical_tool_name in ("simulate_policy", "evaluate_local_policy"):
                         sim_data = result.data or {}
                         state.simulation_results.append(sim_data)
                         if not sim_data.get("success", True):
@@ -787,7 +791,10 @@ class AgentController:
                         orig_perms = role_info.get("active_permissions", [])
                         new_perms = applied_data.get("permissions", [])
                         last_replan = state.replans[-1] if state.replans else {}
-                        retained = last_replan.get("retained_dependencies", ["kms:Decrypt"])
+                        default_retained = (
+                            ["kms:Decrypt"] if self.capabilities.provider_name == "aws" else []
+                        )
+                        retained = last_replan.get("retained_dependencies", default_retained)
 
                         diff = compute_policy_diff(
                             role_id=state.current_role or "PaymentServiceRole",
@@ -797,6 +804,7 @@ class AgentController:
                             new_permissions=new_perms,
                             retained_dependencies=retained,
                             simulation_result=state.simulation_results[-1] if state.simulation_results else None,
+                            provider=self.capabilities.provider_name,
                         )
                         state.policy_diff = diff.model_dump()
 

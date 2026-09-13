@@ -5,6 +5,12 @@
       "name": "PaymentServicePrincipal",
       "type": "Service",
       "roles": ["PaymentServiceRole"]
+    },
+    {
+      "id": "principal-billing-export",
+      "name": "BillingExportPrincipal",
+      "type": "Service",
+      "roles": ["BillingExportSA"]
     }
   ],
   "roles": [
@@ -28,6 +34,28 @@
           "created_at": "2026-09-01T00:00:00Z",
           "is_active": true,
           "reason": "Initial deployment configuration with broad permissions"
+        }
+      ]
+    },
+    {
+      "id": "BillingExportSA",
+      "name": "BillingExportSA",
+      "description": "GCP service account exporting customer billing receipts from Cloud Storage",
+      "current_version": "v1",
+      "policy_versions": [
+        {
+          "version_id": "v1",
+          "permissions": [
+            "storage.objects.get",
+            "storage.objects.create",
+            "cloudkms.cryptoKeyDecrypter",
+            "logging.logEntries.create",
+            "compute.instances.delete",
+            "resourcemanager.projects.setIamPolicy"
+          ],
+          "created_at": "2026-09-01T00:00:00Z",
+          "is_active": true,
+          "reason": "Initial GCP deployment with broad bindings"
         }
       ]
     }
@@ -74,12 +102,53 @@
       "service": "dynamodb",
       "description": "Full administrative control over DynamoDB tables and data",
       "risk_level": "critical"
+    },
+    {
+      "id": "storage.objects.get",
+      "service": "storage",
+      "description": "Read objects from Cloud Storage buckets",
+      "risk_level": "low"
+    },
+    {
+      "id": "storage.objects.create",
+      "service": "storage",
+      "description": "Write objects to Cloud Storage buckets",
+      "risk_level": "medium"
+    },
+    {
+      "id": "cloudkms.cryptoKeyDecrypter",
+      "service": "cloudkms",
+      "description": "Decrypt ciphertext with Cloud KMS customer-managed keys (CMEK)",
+      "risk_level": "medium"
+    },
+    {
+      "id": "logging.logEntries.create",
+      "service": "logging",
+      "description": "Write log entries to Cloud Logging",
+      "risk_level": "low"
+    },
+    {
+      "id": "compute.instances.delete",
+      "service": "compute",
+      "description": "Delete Compute Engine VM instances",
+      "risk_level": "critical"
+    },
+    {
+      "id": "resourcemanager.projects.setIamPolicy",
+      "service": "resourcemanager",
+      "description": "Grant or revoke IAM access on the GCP project (privilege escalation path)",
+      "risk_level": "critical"
     }
   ],
   "bindings": [
     {
       "principal_id": "principal-payment-svc",
       "role_id": "PaymentServiceRole",
+      "attached_at": "2026-09-01T00:00:00Z"
+    },
+    {
+      "principal_id": "principal-billing-export",
+      "role_id": "BillingExportSA",
       "attached_at": "2026-09-01T00:00:00Z"
     }
   ],
@@ -137,6 +206,60 @@
       "resource": "arn:aws:cloudwatch:::metric/payment-svc",
       "timestamp": "2026-09-10T10:15:24Z",
       "success": true
+    },
+    {
+      "id": "log-101",
+      "principal_id": "principal-billing-export",
+      "role_id": "BillingExportSA",
+      "action": "storage.objects.get",
+      "resource": "//storage.googleapis.com/export-receipts/batch-201.json",
+      "timestamp": "2026-09-10T11:02:00Z",
+      "success": true
+    },
+    {
+      "id": "log-102",
+      "principal_id": "principal-billing-export",
+      "role_id": "BillingExportSA",
+      "action": "storage.objects.create",
+      "resource": "//storage.googleapis.com/export-receipts/manifest-201.json",
+      "timestamp": "2026-09-10T11:02:02Z",
+      "success": true
+    },
+    {
+      "id": "log-103",
+      "principal_id": "principal-billing-export",
+      "role_id": "BillingExportSA",
+      "action": "logging.logEntries.create",
+      "resource": "//logging.googleapis.com/projects/billing-prod/logs/export",
+      "timestamp": "2026-09-10T11:02:03Z",
+      "success": true
+    },
+    {
+      "id": "log-104",
+      "principal_id": "principal-billing-export",
+      "role_id": "BillingExportSA",
+      "action": "storage.objects.get",
+      "resource": "//storage.googleapis.com/export-receipts/batch-202.json",
+      "timestamp": "2026-09-10T11:03:20Z",
+      "success": true
+    },
+    {
+      "id": "log-105",
+      "principal_id": "principal-billing-export",
+      "role_id": "BillingExportSA",
+      "action": "storage.objects.create",
+      "resource": "//storage.googleapis.com/export-receipts/manifest-202.json",
+      "timestamp": "2026-09-10T11:03:22Z",
+      "success": true
+    },
+    {
+      "id": "log-106",
+      "principal_id": "principal-billing-export",
+      "role_id": "BillingExportSA",
+      "action": "logging.logEntries.create",
+      "resource": "//logging.googleapis.com/projects/billing-prod/logs/export",
+      "timestamp": "2026-09-10T11:03:23Z",
+      "success": true
     }
   ],
   "services": [
@@ -154,6 +277,21 @@
       "id": "KMS",
       "name": "AWS Key Management Service",
       "owner": "Security Engineering Team"
+    },
+    {
+      "id": "CheckoutService",
+      "name": "Receipt Export Service",
+      "owner": "Billing Engineering Team"
+    },
+    {
+      "id": "CloudStorage",
+      "name": "Google Cloud Storage",
+      "owner": "Cloud Infrastructure Team"
+    },
+    {
+      "id": "CloudKMS",
+      "name": "Google Cloud Key Management Service",
+      "owner": "Security Engineering Team"
     }
   ],
   "dependencies": [
@@ -163,6 +301,13 @@
       "downstream_dependency": "KMS",
       "required_permission": "kms:Decrypt",
       "reason": "PaymentService reads customer checkout records from encrypted S3 bucket 'payment-transactions', which uses KMS key 'arn:aws:kms:::key/payment-key' (SSE-KMS). Reading objects requires kms:Decrypt."
+    },
+    {
+      "service": "CheckoutService",
+      "calls_service": "CloudStorage",
+      "downstream_dependency": "CloudKMS",
+      "required_permission": "cloudkms.cryptoKeyDecrypter",
+      "reason": "CheckoutService reads billing receipts from encrypted Cloud Storage bucket 'export-receipts', which uses Cloud KMS key 'projects/billing-prod/locations/global/keyRings/export/cryptoKeys/receipt-key' (CMEK). Reading objects requires cloudkms.cryptoKeyDecrypter."
     }
   ],
   "resources": [
@@ -200,6 +345,34 @@
       "type": "dynamodb",
       "is_protected": true,
       "required_permissions": ["dynamodb:*"]
+    },
+    {
+      "id": "res-gcs-export",
+      "arn": "//storage.googleapis.com/export-receipts/*",
+      "type": "gcs",
+      "is_protected": false,
+      "required_permissions": ["storage.objects.get", "storage.objects.create"]
+    },
+    {
+      "id": "res-kms-export-key",
+      "arn": "//cloudkms.googleapis.com/projects/billing-prod/locations/global/keyRings/export/cryptoKeys/receipt-key",
+      "type": "kms",
+      "is_protected": false,
+      "required_permissions": ["cloudkms.cryptoKeyDecrypter"]
+    },
+    {
+      "id": "res-gcp-iam-admin",
+      "arn": "//cloudresourcemanager.googleapis.com/projects/billing-prod",
+      "type": "iam",
+      "is_protected": true,
+      "required_permissions": ["resourcemanager.projects.setIamPolicy"]
+    },
+    {
+      "id": "res-gcp-compute-prod",
+      "arn": "//compute.googleapis.com/projects/billing-prod/zones/*/instances/prod-*",
+      "type": "compute",
+      "is_protected": true,
+      "required_permissions": ["compute.instances.delete"]
     }
   ],
   "workflows": [
@@ -215,6 +388,19 @@
         "cloudwatch:PutMetricData"
       ],
       "hidden_dependency_notes": "S3 object retrieval requires kms:Decrypt for SSE-KMS customer key decryption"
+    },
+    {
+      "id": "gcp_export_flow",
+      "name": "Receipt Export Workflow",
+      "description": "Reads CMEK-encrypted billing receipt from Cloud Storage, writes export manifest, and emits log entry",
+      "role_id": "BillingExportSA",
+      "required_permissions": [
+        "storage.objects.get",
+        "storage.objects.create",
+        "cloudkms.cryptoKeyDecrypter",
+        "logging.logEntries.create"
+      ],
+      "hidden_dependency_notes": "Cloud Storage object retrieval requires cloudkms.cryptoKeyDecrypter for CMEK customer key decryption"
     }
   ],
   "simulation_runs": []

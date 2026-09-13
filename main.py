@@ -16,6 +16,9 @@ from backend.providers.capabilities import AWS_CAPABILITIES, AZURE_CAPABILITIES,
 from backend.scenarios import (
     BrokenPolicyReasoner,
     CrossProviderMismatchReasoner,
+    GCP_DEMO_ROLE_ID,
+    GCPDeterministicReasoner,
+    GCPRecoveryReasoner,
     GCPSimulationAttemptReasoner,
     SensitiveAdminRemovalReasoner,
     StaleStateReasoner,
@@ -433,6 +436,84 @@ def run_stale_state_demo() -> int:
     return 0 if state.current_phase == "COMPLETED" and role.current_version == "v3" else 1
 
 
+def run_gcp_demo(role_id: str = GCP_DEMO_ROLE_ID) -> int:
+    """Demo: Autonomous least-privilege mitigation on GCP (local sandbox evaluation)."""
+    global step_counter, simulation_count
+    step_counter = 0
+    simulation_count = 0
+
+    print("=" * 70)
+    print("DEMO: GCP LEAST-PRIVILEGE MITIGATION (LOCAL EVALUATION)")
+    print("=" * 70)
+
+    env = load_environment()
+    tool_registry = create_extended_tool_registry(env)
+
+    controller = AgentController(
+        reasoner=GCPDeterministicReasoner(target_role_id=role_id),
+        tool_registry=tool_registry,
+        event_callback=format_cli_output,
+        environment=env,
+        provider="gcp",
+    )
+
+    state = controller.run(
+        goal=f"Make {role_id} least privilege without breaking required export workflows.",
+        role_id=role_id,
+        provider="gcp",
+    )
+
+    print("-" * 70)
+    print("LOCAL EVALUATION AUDIT:")
+    print(f"  provider:       {state.provider.upper()} (sandbox local evaluation)")
+    print(f"  final phase:    {state.current_phase}")
+    print(f"  stop reason:    {state.stop_reason}")
+    if state.policy_diff:
+        print("\nPOLICY DIFF:")
+        diff = PolicyDiff.model_validate(state.policy_diff)
+        print(diff.render_markdown())
+    print("-" * 70)
+    return 0 if state.current_phase == "COMPLETED" else 1
+
+
+def run_gcp_recovery_demo(role_id: str = GCP_DEMO_ROLE_ID) -> int:
+    """Demo: Honest GCP recovery by re-binding correct policy (no atomic rollback on GCP)."""
+    global step_counter, simulation_count
+    step_counter = 0
+    simulation_count = 0
+
+    print("=" * 70)
+    print("DEMO: GCP HONEST RECOVERY VIA RE-BINDING")
+    print("=" * 70)
+
+    env = load_environment()
+    tool_registry = create_extended_tool_registry(env)
+
+    controller = AgentController(
+        reasoner=GCPRecoveryReasoner(target_role_id=role_id),
+        tool_registry=tool_registry,
+        event_callback=format_cli_output,
+        environment=env,
+        provider="gcp",
+    )
+
+    state = controller.run(
+        goal="Demonstrate honest GCP recovery by re-binding correct policy after failed verification.",
+        role_id=role_id,
+        provider="gcp",
+    )
+
+    print("-" * 70)
+    print("RECOVERY AUDIT:")
+    print(f"  provider:       {state.provider.upper()}")
+    print(f"  final phase:    {state.current_phase}")
+    print(f"  stop reason:    {state.stop_reason}")
+    role = env.get_role(role_id)
+    print(f"  active version: {role.current_version if role else 'unknown'}")
+    print("-" * 70)
+    return 0 if state.current_phase == "COMPLETED" else 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="PS10 Autonomous Cloud IAM Least-Privilege Mitigator (Phase 4 Safety Engine)"
@@ -441,7 +522,7 @@ def main() -> None:
         "--demo",
         type=str,
         default="aws",
-        choices=["aws", "safety-block", "rollback", "stale-state", "unsupported-gcp", "provider-mismatch"],
+        choices=["aws", "gcp", "gcp-recovery", "safety-block", "rollback", "stale-state", "unsupported-gcp", "provider-mismatch"],
         help="Demo scenario to execute (default: aws)",
     )
     parser.add_argument(
@@ -566,6 +647,10 @@ def main() -> None:
 
     if args.demo == "unsupported-gcp":
         exit_code = run_unsupported_gcp_demo()
+    elif args.demo == "gcp":
+        exit_code = run_gcp_demo(role_id=args.role if args.role != "PaymentServiceRole" else GCP_DEMO_ROLE_ID)
+    elif args.demo == "gcp-recovery":
+        exit_code = run_gcp_recovery_demo(role_id=args.role if args.role != "PaymentServiceRole" else GCP_DEMO_ROLE_ID)
     elif args.demo == "provider-mismatch":
         exit_code = run_provider_mismatch_demo()
     elif args.demo == "safety-block":
