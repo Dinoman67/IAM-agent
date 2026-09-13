@@ -105,6 +105,25 @@ export async function getAgentRun(runId: string): Promise<AgentRunResponse> {
   return res.json();
 }
 
+export async function requestOverride(runId: string, approvedBy: string, reason: string): Promise<AgentRunResponse> {
+  const res = await fetch(`${API_BASE}/api/agent/override`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_id: runId, approved_by: approvedBy, reason }),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const errJson = await res.json();
+      detail = errJson.detail || JSON.stringify(errJson);
+    } catch {
+      // ignore
+    }
+    throw new Error(`Override failed (${res.status}): ${detail}`);
+  }
+  return res.json();
+}
+
 export async function getAttackGraph(roleId: string): Promise<AttackGraph> {
   const res = await fetch(`${API_BASE}/api/roles/${encodeURIComponent(roleId)}/attack-graph`);
   if (!res.ok) throw new Error(`Attack graph failed: ${res.statusText}`);

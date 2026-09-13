@@ -3,6 +3,7 @@ export type ProviderName = 'aws' | 'gcp' | 'azure';
 export type DemoScenario = 
   | 'aws' 
   | 'gcp'
+  | 'lowconf'
   | 'safety_block' 
   | 'rollback' 
   | 'stale_state' 

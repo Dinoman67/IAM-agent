@@ -7,11 +7,11 @@ import {
   Play,
   RotateCcw,
   ShieldAlert,
-  ShieldCheck,
   Undo2,
 } from 'lucide-react';
 import { AgentRunResponse, DemoScenario, Role } from '../types';
 import { DownloadRow } from '../components/run/DownloadRow';
+import { getTier, isHaltedRun } from '../components/kernel/model';
 
 interface SimulationPageProps {
   roles: Role[];
@@ -33,6 +33,7 @@ const SCENARIOS: Array<{ id: DemoScenario; label: string }> = [
   { id: 'safety_block', label: 'Safety block' },
   { id: 'rollback', label: 'Rollback' },
   { id: 'stale_state', label: 'Stale state' },
+  { id: 'lowconf', label: 'Low-confidence hold' },
   { id: 'provider_mismatch', label: 'Boundary guard' },
 ];
 
@@ -88,6 +89,16 @@ const SCENARIO_INFO: Record<DemoScenario, { title: string; lines: string[] }> = 
       'The agent detects its baseline went stale.',
       'It refreshes, replans against v2, and applies v3.',
       'Optimistic concurrency handling, no drama.',
+    ],
+  },
+  lowconf: {
+    title: 'Low-confidence hold',
+    lines: [
+      'A valid cleanup proposed at sub-threshold confidence.',
+      'Simulation passes and evidence holds — but certainty is thin.',
+      'The kernel halts instead of applying: a human must decide.',
+      'This halt raises a Review notification for approval.',
+      'Approve it in Review to watch the override apply and verify.',
     ],
   },
   unsupported_gcp: {
@@ -234,34 +245,6 @@ function useRunFlags(run: AgentRunResponse | null) {
 const pickerCls =
   'w-full bg-black border border-white/20 hover:border-white/40 rounded-lg px-3 py-2.5 text-sm font-mono text-slate-200 cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-400 disabled:opacity-40';
 
-const KERNEL_INVARIANTS = [
-  'NO_PRIVILEGE_EXPANSION',
-  'NO_PROTECTED_PERMISSION_MUTATION',
-  'NO_PROTECTED_RESOURCE_EXPOSURE',
-  'NO_CROSS_PROVIDER_MUTATION',
-  'NO_CROSS_TENANT_MUTATION',
-  'NO_STALE_STATE_MUTATION',
-  'NO_MUTATION_WITHOUT_EVIDENCE',
-  'NO_MUTATION_WITHOUT_SIMULATION',
-  'NO_MUTATION_WITHOUT_PRE_APPLY_VERIFICATION',
-  'NO_COMPLETION_WITHOUT_VERIFICATION',
-  'NO_UNAPPROVED_HIGH_RISK',
-];
-
-const KERNEL_CMDS = ['help', 'status', 'invariants', 'diff', 'allow', 'deny', 'escalate', 'ack'];
-
-interface KernelVerdict {
-  action: 'allow' | 'deny' | 'escalate' | 'ack';
-  reason: string;
-  raw: string;
-}
-
-interface KernelEntry {
-  cmd: string;
-  out: string[];
-  tone: 'info' | 'good' | 'bad' | 'warn';
-}
-
 const STEP_MS = 650;
 
 export const SimulationPage: React.FC<SimulationPageProps> = ({
@@ -284,15 +267,9 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
     [currentRun?.run_id],
   );
   const [reveal, setReveal] = useState(0);
-  const [kernelLog, setKernelLog] = useState<KernelEntry[]>([]);
-  const [kernelInput, setKernelInput] = useState('');
-  const [kernelVerdict, setKernelVerdict] = useState<KernelVerdict | null>(null);
   const [evidencePerm, setEvidencePerm] = useState<string | null>(null);
   useEffect(() => {
     setReveal(0);
-    setKernelLog([]);
-    setKernelInput('');
-    setKernelVerdict(null);
     setEvidencePerm(null);
     if (!currentRun) return;
     const t = setInterval(() => {
@@ -336,112 +313,18 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
   const removed = diff?.removed ?? [];
   const kept = diff?.kept ?? [];
 
-  // ---- Security Kernel console (visual reenactment of the real gate) ----
-  // Always visible while a run exists; content goes standby → live gate.
+  // ---- Gate facts for the tier badge (kernel console now lives in Review) ----
   const events = currentRun?.events ?? [];
   const secChecks = events.filter((e) => e.event_type === 'security_check');
   const secCheck = secChecks[secChecks.length - 1];
   const secDetails: any = secCheck?.details ?? {};
   const kernelDecision: string = secDetails.decision ?? currentRun?.security_decision?.decision ?? '';
   const kernelBlast: string = secDetails.blast_radius ?? currentRun?.blast_radius ?? 'LOW';
-  const kernelArrived = revealed.some((l) => l.stage >= 4) || showResultPre;
-  const showKernel = !!currentRun;
-  // ---- Autonomy tiers, derived purely from the finished payload ----
-  // Standard: removal-only, gate allowed, blast LOW/MEDIUM → no human needed.
-  // Sensitive: gate denied/escalated, HIGH blast, or a halting stop reason
-  // → a human is required by design. Display-only; engine behavior unchanged.
-  const STOP_RULES: Record<string, string> = {
-    security_block: 'protected capability removal forbidden',
-    provider_mismatch: 'cross-provider mutation forbidden',
-    privilege_expansion_blocked: 'privilege expansion forbidden',
-    unsupported_capability: 'unsupported provider operation',
-    human_approval_required: 'human approval required',
-    insufficient_evidence: 'insufficient evidence for change',
-  };
-  const stopReason = currentRun?.stop_reason ?? '';
-  const blastHigh = kernelBlast === 'HIGH' || kernelBlast === 'CRITICAL';
-  const gateDenied = kernelDecision !== '' && kernelDecision !== 'allow';
-  const tierSensitive =
-    !!currentRun && (gateDenied || blastHigh || STOP_RULES[stopReason] !== undefined);
-  const tierRule =
-    STOP_RULES[stopReason] ??
-    (gateDenied ? `gate ${kernelDecision}` : blastHigh ? `blast radius ${kernelBlast}` : '');
-  // The operator console is a sandbox: it records what-if entries only and
-  // never gates the verdict — the backend run already completed on its own.
-  const kernelGateActive = kernelDecision === 'allow' && removed.length > 0;
-
-  const pushKernel = (cmd: string, out: string[], tone: KernelEntry['tone']) =>
-    setKernelLog((log) => [...log, { cmd, out, tone }].slice(-30));
-
-  const runKernelCmd = (raw: string) => {
-    const text = raw.trim();
-    if (!text) return;
-    const verb = text.split(/\s+/)[0].toLowerCase();
-    const reasonMatch = text.match(/--reason\s+"([^"]+)"|--reason\s+(.+)$/);
-    const reason = (reasonMatch?.[1] ?? reasonMatch?.[2] ?? '').trim();
-
-    if (verb === 'help') {
-      pushKernel(text, ['commands: help · status · invariants · diff · allow · deny · escalate · ack', 'sandbox: allow | deny | escalate explore what-if outcomes · ack acknowledges the gate'], 'info');
-      return;
-    }
-    if (verb === 'status') {
-      pushKernel(text, [
-        `gate: ${kernelDecision ? kernelDecision.toUpperCase() : '—'} · blast: ${kernelBlast}`,
-        `role: ${currentRun?.role_id ?? '—'} · proposed removals: ${removed.join(', ') || 'none'}`,
-      ], 'info');
-      return;
-    }
-    if (verb === 'invariants') {
-      pushKernel(text, KERNEL_INVARIANTS.map((v, i) => `${String(i + 1).padStart(2, '0')}. ${v}`), 'info');
-      return;
-    }
-    if (verb === 'diff') {
-      if (!removed.length && !kept.length) {
-        pushKernel(text, ['no diff — nothing was applied on this run'], 'warn');
-      } else {
-        pushKernel(text, [
-          ...removed.map((p) => `- ${p}`),
-          ...kept.map((p) => `+ ${p} (kept)`),
-        ], 'info');
-      }
-      return;
-    }
-    if (verb === 'allow') {
-      if (!kernelGateActive) {
-        pushKernel(text, [`gate decision is ${kernelDecision ? kernelDecision.toUpperCase() : 'unavailable'} — recorded as what-if only; try 'ack'`], 'warn');
-        setKernelVerdict({ action: 'allow', reason, raw: text });
-        return;
-      }
-      setKernelVerdict({ action: 'allow', reason, raw: text });
-      pushKernel(text, [`what-if authorized${reason ? ` — ${reason}` : ''} (verdict above already released on its own)`], 'good');
-      return;
-    }
-    if (verb === 'deny' || verb === 'escalate') {
-      setKernelVerdict({ action: verb, reason, raw: text });
-      pushKernel(text, [`what-if ${verb}${reason ? ` — ${reason}` : ''} — change would be held for human review (verdict above unchanged)`], 'warn');
-      return;
-    }
-    if (verb === 'ack') {
-      if (kernelGateActive) {
-        pushKernel(text, ["nothing to acknowledge — gate awaits 'allow' or 'deny'"], 'warn');
-        return;
-      }
-      setKernelVerdict({ action: 'ack', reason, raw: text });
-      pushKernel(text, ['gate acknowledged — releasing run outcome'], 'info');
-      return;
-    }
-    pushKernel(text, [`unknown command '${verb}' — try: ${KERNEL_CMDS.join(', ')}`], 'bad');
-  };
-
-  const submitKernel = () => {
-    runKernelCmd(kernelInput);
-    setKernelInput('');
-  };
+  const { sensitive: tierSensitive, rule: tierRule } = getTier(currentRun, kernelDecision, kernelBlast);
 
   // Verdict auto-releases when playback completes — the backend run already
-  // finished alone. Sandbox entries never gate or reshape it.
+  // finished alone.
   const showResult = showResultPre;
-  const heldByOperator = kernelVerdict !== null && (kernelVerdict.action === 'deny' || kernelVerdict.action === 'escalate');
 
   return (
     <div className="relative min-h-[calc(100vh-4rem)]">
@@ -633,102 +516,12 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
           </div>
         )}
 
-        {/* SECURITY KERNEL console — output box */}
-        {showKernel && currentRun && (
-          <div className="mt-3 max-w-3xl mx-auto rounded-lg border border-amber-400/25 bg-amber-400/[0.03] p-4 animate-rise-in">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-amber-300" />
-              <span className="text-[10px] font-mono tracking-[0.2em] text-amber-200/80">SECURITY KERNEL</span>
-              <span className="ml-auto text-[10px] font-mono text-slate-600">sandbox — step into the gate</span>
-            </div>
-            <div className="mt-2.5 font-mono text-xs leading-6">
-              {!kernelArrived ? (
-                <div className="text-slate-500">▸ Kernel standing by — gate opens at the Verify stage…</div>
-              ) : secCheck ? (
-                <>
-                  <div className="text-slate-400">▸ Loading 11 deterministic invariants…</div>
-                  <div className="text-slate-400">▸ Privilege-expansion check: <span className="text-emerald-300">PASS</span> (removal only)</div>
-                  <div className="text-slate-400">▸ Blast radius: <span className="text-slate-200">{kernelBlast}</span></div>
-                  <div className={kernelDecision === 'allow' ? 'text-emerald-300' : 'text-rose-300'}>
-                    ▸ Decision: {kernelDecision.toUpperCase() || '—'}
-                  </div>
-                </>
-              ) : (
-                <div className="text-amber-200/90">
-                  ▸ No mutation gate reached — run escalated ({currentRun.stop_reason ?? 'human review needed'})
-                </div>
-              )}
-
-              {kernelArrived && kernelLog.map((entry, i) => (
-                <div key={i} className="mt-1">
-                  <div className="text-sky-300 select-none">› {entry.cmd}</div>
-                  {entry.out.map((line, j) => (
-                    <div
-                      key={j}
-                      className={
-                        entry.tone === 'good' ? 'text-emerald-300'
-                        : entry.tone === 'bad' ? 'text-rose-300'
-                        : entry.tone === 'warn' ? 'text-amber-200/90'
-                        : 'text-slate-400'
-                      }
-                    >
-                      {line}
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* KERNEL COMMANDS — separate, bigger input box below the kernel */}
-        {showKernel && currentRun && kernelArrived && (
-          <div className="mt-3 max-w-3xl mx-auto rounded-lg border border-white/15 bg-white/[0.03] p-5 animate-rise-in">
-            <div className="text-[11px] font-mono tracking-[0.2em] text-slate-400">
-              KERNEL COMMANDS — OPTIONAL SANDBOX PLAY
-            </div>
-            <div className="mt-3 flex items-center gap-3">
-              <span className="text-lg text-sky-300 select-none">›</span>
-              <input
-                value={kernelInput}
-                onChange={(e) => setKernelInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') submitKernel(); }}
-                placeholder="try: help"
-                autoFocus
-                spellCheck={false}
-                autoComplete="off"
-                className="flex-1 min-w-0 bg-black/60 border border-white/20 focus:border-sky-400 rounded-md px-4 py-2.5 text-base text-slate-100 placeholder:text-slate-600 focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={submitKernel}
-                className="text-sm font-mono px-4 py-2.5 rounded-md border border-white/20 hover:border-white/50 text-slate-200 hover:text-white transition-colors cursor-pointer shrink-0"
-              >
-                ↵ run
-              </button>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {KERNEL_CMDS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    if (c === 'allow' || c === 'deny' || c === 'escalate') {
-                      setKernelInput(`${c} `);
-                    } else {
-                      runKernelCmd(c);
-                    }
-                  }}
-                  title={c === 'allow' || c === 'deny' || c === 'escalate' ? 'Fills the input — add --reason if you like, then ↵' : `Runs ${c}`}
-                  className="text-xs font-mono px-2.5 py-1 rounded-md border border-white/15 hover:border-sky-400/60 hover:text-sky-200 text-slate-300 transition-colors cursor-pointer"
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
-            <div className="mt-2 text-[11px] font-mono text-slate-600">
-              what-if sandbox: allow · deny · escalate explore alternatives · ack acknowledges — verdict below is already final
-            </div>
+        {/* Kernel lives in Review now — this page stays a pure run surface. */}
+        {showResult && currentRun && isHaltedRun(currentRun.stop_reason) && (
+          <div className="mt-3 max-w-3xl mx-auto text-center animate-rise-in">
+            <p className="text-xs font-mono text-amber-200/80">
+              Halted runs wait in Review — open it to inspect the gate and approve or refuse.
+            </p>
           </div>
         )}
 
@@ -768,19 +561,6 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
                   ) : (
                     <>Assessment complete — zero regression.</>
                   )}
-                </p>
-              </div>
-            )}
-
-            {heldByOperator && (
-              <div className="mt-6 rounded-lg border border-white/10 bg-white/[0.02] p-4 text-center">
-                <div className="text-[10px] font-mono tracking-[0.2em] text-slate-500">SANDBOX WHAT-IF</div>
-                <p className="mt-1.5 text-[13px] text-slate-400 leading-relaxed">
-                  You entered <span className="font-mono text-amber-300">{kernelVerdict?.raw}</span>
-                  {kernelVerdict?.reason && (
-                    <> — <span className="text-slate-200">“{kernelVerdict.reason}”</span></>
-                  )}. Had the gate decided that way, the change would be held for human
-                  review instead of applied. The verdict below is the actual run outcome.
                 </p>
               </div>
             )}
@@ -897,12 +677,6 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
                 </p>
               );
             })()}
-
-            {kernelVerdict && (
-              <p className={`mt-3 text-center text-[11px] font-mono ${kernelVerdict.action === 'allow' ? 'text-emerald-300/80' : 'text-amber-300/80'}`}>
-                sandbox: {kernelVerdict.raw}{kernelVerdict.reason ? ` — “${kernelVerdict.reason}”` : ''} (exploration only — verdict above stands)
-              </p>
-            )}
 
             <div className="mt-5 text-center text-[11px] font-mono text-slate-600">
               {(currentRun.blast_radius ? `blast ${currentRun.blast_radius}` : 'blast LOW')
