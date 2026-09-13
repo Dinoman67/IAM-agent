@@ -95,6 +95,21 @@ export interface AgentRunResponse {
   };
   verification_result?: VerificationResult;
   policy_diff?: PolicyDiff;
+  candidate_policy_changes?: Array<{
+    role_id?: string;
+    remove_permissions?: string[];
+    proposed_permissions?: string[];
+    retained_dependencies?: string[];
+    reason?: string;
+  }>;
+  replans?: Array<{
+    role_id?: string;
+    remove_permissions?: string[];
+    proposed_permissions?: string[];
+    retained_dependencies?: string[];
+    reason?: string;
+  }>;
+  simulation_results?: Array<Record<string, any>>;
   telemetry?: {
     runtime_ms?: number;
     iterations?: number;

@@ -160,6 +160,9 @@ class AgentRunResponse(BaseModel):
     final_result: Optional[Dict[str, Any]] = None
     verification_result: Optional[Dict[str, Any]] = None
     policy_diff: Optional[Dict[str, Any]] = None
+    candidate_policy_changes: Optional[List[Dict[str, Any]]] = None
+    replans: Optional[List[Dict[str, Any]]] = None
+    simulation_results: Optional[List[Dict[str, Any]]] = None
     telemetry: Optional[Dict[str, Any]] = None
     stop_reason: Optional[str] = None
     security_decision: Optional[Dict[str, Any]] = None
@@ -317,6 +320,9 @@ def _extract_response_from_state(state: AgentState) -> AgentRunResponse:
         final_result=state.final_outcome,
         verification_result=state.verification_result,
         policy_diff=state.policy_diff,
+        candidate_policy_changes=state.candidate_policy_changes or None,
+        replans=state.replans or None,
+        simulation_results=state.simulation_results or None,
         telemetry=state.telemetry,
         stop_reason=state.stop_reason,
         security_decision=sec_decision,

@@ -71,7 +71,9 @@ export const AuditPage: React.FC<AuditPageProps> = ({ previewId, onPreview }) =>
                     }`}
                   />
                   <span className="min-w-0">
-                    <span className="block text-[13px] font-mono text-slate-200 truncate">{r.run_id}</span>
+                    <span className="block text-[13px] font-mono text-slate-200 truncate">
+                      {r.run_id} <span className="text-slate-500">· {kindOf(r.stop_reason).label}</span>
+                    </span>
                     <span className="block text-[11px] font-mono text-slate-500 truncate">
                       {r.role_id} · {r.stop_reason ?? r.status} · {r.events_count} events
                     </span>
