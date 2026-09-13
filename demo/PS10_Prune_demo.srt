@@ -1,32 +1,32 @@
 1
-00:00:00,000 --> 00:00:11,750
-Unobserved ≠ unneeded — deleting blind breaks prod at 2AM
+00:00:00,500 --> 00:00:11,652
+Meet Prune — unobserved ≠ unneeded
 
 2
-00:00:11,750 --> 00:00:21,500
-Prune: autonomous IAM least-privilege mitigator
+00:00:11,000 --> 00:00:14,328
+Live run on a payment role
 
 3
-00:00:21,500 --> 00:00:31,750
-1 · Observe: 7 permissions, 3 wildcards, 4 never logged
+00:00:14,500 --> 00:00:21,548
+Rehearsal FAILS on hidden kms:Decrypt
 
 4
-00:00:31,750 --> 00:00:43,000
-2 · Simulate: rehearsal FAILS — checkout needs kms:Decrypt
+00:00:24,000 --> 00:00:32,368
+Coupling found → replan → kernel ALLOW
 
 5
-00:00:43,000 --> 00:00:55,417
-3 · Replan: hidden S3→KMS coupling found — keep it, cut the rest
+00:00:32,200 --> 00:00:39,152
+Verified 7→4, evidence per change
 
 6
-00:00:55,417 --> 00:01:08,917
-4 · Verify: 11 invariants + blast LOW → ALLOW → v2 verified
+00:00:37,000 --> 00:00:46,328
+Evidence · Policy · Exports · Audit
 
 7
-00:01:08,917 --> 00:01:22,250
-Proof: 7→4 · duel BREACHED→HELD · AWS + GCP · 131 tests green
+00:00:49,500 --> 00:00:59,620
+Same loop on GCP
 
 8
-00:01:22,250 --> 00:01:31,417
+00:01:01,500 --> 00:01:08,428
 AI proposes. Deterministic controls decide.
 
