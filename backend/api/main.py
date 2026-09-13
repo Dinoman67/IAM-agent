@@ -235,7 +235,10 @@ def list_runs() -> Dict[str, Any]:
     risk_count = 0
 
     summaries = []
-    for r in reversed(runs):
+    # NOTE: stores disagree on list_all() order (SQLite: newest-first,
+    # memory: oldest-first, JSON files: arbitrary), so sort explicitly here.
+    # summaries[0] is always the latest run — Review and Audit depend on it.
+    for r in runs:
         is_verified = bool(r.verification_result and r.verification_result.get("passed"))
         if is_verified:
             changes_verified += 1
@@ -286,6 +289,9 @@ def list_runs() -> Dict[str, Any]:
             avg_risk_str = "LOW"
         elif avg_num > 2.5:
             avg_risk_str = "HIGH"
+
+    # Newest-first regardless of store backend (summaries carry ISO created_at).
+    summaries.sort(key=lambda s: s.get("created_at") or "", reverse=True)
 
     return {
         "metrics": {
