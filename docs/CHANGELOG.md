@@ -12,6 +12,9 @@
   approver + reason, `deny` records refusal; Run page keeps verdicts,
   evidence, downloads. Rail adds Review with blocked-only badge.
 - Tests: `tests/test_override.py` (6 tests); suite 137 passing.
+- Review speaks per halt kind: `AgentRunResponse` now serializes recorded
+  proposals (`policy_diff → replans → candidate_policy_changes`), each halt
+  kind carries its own narrative, Audit rows show kind labels.
 
 ## Unreleased (console rebuild + GCP path)
 

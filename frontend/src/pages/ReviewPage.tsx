@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { AgentRunResponse, RunSummary } from '../types';
 import { getAgentRun, requestOverride } from '../services/api';
-import { KERNEL_INVARIANTS, gateLines, getTier, isHaltedRun, kindOf } from '../components/kernel/model';
+import { KERNEL_INVARIANTS, gateLines, getTier, isHaltedRun, kindOf, narrativeOf, recordedProposal } from '../components/kernel/model';
 import { DownloadRow } from '../components/run/DownloadRow';
 
 interface ReviewPageProps {
@@ -80,9 +80,10 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({ summaries, onReviewed, o
   const gate = detail ? gateLines(detail) : { decision: '', blast: '—', codes: [] as string[] };
   const tier = getTier(detail, gate.decision, gate.blast);
   const kind = kindOf(detail?.stop_reason);
-  const diff = detail?.policy_diff;
-  const removed: string[] = diff?.removed ?? [];
-  const kept: string[] = diff?.kept ?? [];
+  const narrative = narrativeOf(detail?.stop_reason);
+  const proposal = recordedProposal(detail);
+  const removed: string[] = proposal.remove;
+  const kept: string[] = proposal.keep;
 
   const doApprove = async (raw: string, by: string, why: string) => {
     if (!detail || busy) return;
@@ -166,6 +167,16 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({ summaries, onReviewed, o
                   <span className="font-mono text-sm text-slate-400">{detail.role_id ?? '—'}</span>
                   <span className="font-mono text-sm text-slate-500">{detail.provider?.toUpperCase() ?? ''}</span>
                   <span className="font-mono text-xs text-slate-500 ml-auto">halted {haltedAt(detail)}</span>
+                </div>
+
+                {/* what happened here, in this run's own words */}
+                <div className="rounded-lg border border-white/10 bg-white/[0.02] p-6">
+                  <div className="text-[11px] font-mono tracking-[0.2em] text-slate-500">
+                    WHAT HAPPENED
+                  </div>
+                  <p className="mt-2 text-lg text-slate-100 leading-relaxed">{narrative.headline}</p>
+                  <p className="mt-1.5 text-[15px] text-slate-400 leading-relaxed">{narrative.whatHappened}</p>
+                  <p className="mt-1.5 text-[15px] text-slate-300 leading-relaxed">{narrative.whatNext}</p>
                 </div>
 
                 {/* the request — what the simulation asked for */}
