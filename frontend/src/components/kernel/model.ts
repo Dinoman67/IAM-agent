@@ -52,6 +52,27 @@ export interface TierInfo {
   rule: string;
 }
 
+/** Visual identity per halt kind — so different requests never look alike. */
+export const KIND_META: Record<string, { label: string; chip: string; dot: string }> = {
+  security_block: { label: 'Safety veto', chip: 'text-rose-300 border-rose-500/40 bg-rose-500/10', dot: 'bg-rose-400' },
+  provider_mismatch: { label: 'Boundary block', chip: 'text-violet-300 border-violet-500/40 bg-violet-500/10', dot: 'bg-violet-400' },
+  privilege_expansion_blocked: { label: 'Expansion blocked', chip: 'text-rose-300 border-rose-500/40 bg-rose-500/10', dot: 'bg-rose-400' },
+  verification_failure_rolled_back: { label: 'Rolled back', chip: 'text-sky-300 border-sky-500/40 bg-sky-500/10', dot: 'bg-sky-400' },
+  rollback_failure: { label: 'Recovery failed', chip: 'text-rose-300 border-rose-500/40 bg-rose-500/10', dot: 'bg-rose-400' },
+  unsupported_capability: { label: 'Needs capability', chip: 'text-slate-300 border-white/20 bg-white/[0.04]', dot: 'bg-slate-400' },
+  human_approval_required: { label: 'Needs approval', chip: 'text-amber-300 border-amber-500/40 bg-amber-500/10', dot: 'bg-amber-300' },
+  high_risk: { label: 'Low-confidence hold', chip: 'text-amber-300 border-amber-500/40 bg-amber-500/10', dot: 'bg-amber-300' },
+  insufficient_evidence: { label: 'Needs evidence', chip: 'text-amber-300 border-amber-500/40 bg-amber-500/10', dot: 'bg-amber-300' },
+  override_refused: { label: 'Override refused', chip: 'text-rose-300 border-rose-500/40 bg-rose-500/10', dot: 'bg-rose-400' },
+  override_verification_failed: { label: 'Override failed', chip: 'text-rose-300 border-rose-500/40 bg-rose-500/10', dot: 'bg-rose-400' },
+};
+
+export function kindOf(stop?: string | null): { label: string; chip: string; dot: string } {
+  if (stop && KIND_META[stop]) return KIND_META[stop];
+  const label = stop ? stop.replace(/_/g, ' ') : 'halted';
+  return { label, chip: 'text-slate-300 border-white/20 bg-white/[0.04]', dot: 'bg-slate-400' };
+}
+
 /** Standard (auto, no human) vs Sensitive (human required) — display-only. */
 export function getTier(
   run: AgentRunResponse | null,

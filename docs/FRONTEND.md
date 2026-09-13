@@ -18,12 +18,15 @@ by the FastAPI backend; rebuilt with `cd frontend && npm run build`.
   event playback, auto-releasing verdict with tier badge, per-change evidence,
   downloads, scenario explainer cards. Kernel-free by design: the gate lives
   in Review.
-- **`ReviewPage` (Review)** — badge-notified queue of halted runs only.
-  Selecting one shows its kernel box (decision, blast, named rule, proposal),
-  then a commands box (explorers + `allow`/`deny` with mandatory approver and
-  reason), then the outcome panel. `allow` on overridable halts executes a real
+- **`ReviewPage` (Review)** — the single latest halted run, shown big: kind
+  chip + identity header (run, role, provider, halted-at), REQUEST card (goal
+  + proposed removals/kept + halt reason), kernel box (decision, blast, named
+  rule), commands box (explorers + `allow`/`deny` with mandatory approver and
+  reason), then a single latest-output panel (each new command replaces the
+  last — no log history). `allow` on overridable halts executes a real
   `POST /api/agent/override` run; load-bearing denials refuse deterministically.
-  Reviewed runs clear the badge (persisted per run-ID).
+  Badge notifies only for runs that halt after load (pre-existing halts are
+  baselined as reviewed); viewing clears it (persisted per run-ID).
 - **`EvidencePage`** — granted-permission ledger (risk tiers, cut/kept stamps
   once a run exists), hidden dependencies, protected workflows. Reads
   `GET /api/principals` + the shared run object; needs no run to be useful.

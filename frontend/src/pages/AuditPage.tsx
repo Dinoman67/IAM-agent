@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { RunSummary } from '../types';
 import { listRuns } from '../services/api';
+import { kindOf } from '../components/kernel/model';
 
 interface AuditPageProps {
   previewId?: string | null;
@@ -66,7 +67,7 @@ export const AuditPage: React.FC<AuditPageProps> = ({ previewId, onPreview }) =>
                 >
                   <span
                     className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                      r.verified ? 'bg-emerald-400' : r.stop_reason?.includes('block') || r.stop_reason?.includes('mismatch') ? 'bg-rose-400' : 'bg-amber-300'
+                      r.verified ? 'bg-emerald-400' : kindOf(r.stop_reason).dot
                     }`}
                   />
                   <span className="min-w-0">
