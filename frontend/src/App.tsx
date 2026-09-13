@@ -1,20 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { AgentRunResponse, DemoScenario, Role } from './types';
+import { AgentRunResponse, DemoScenario, Role, ServiceDependency, Workflow } from './types';
 import { checkHealth, getAgentRun, getPrincipals, triggerAgentRun } from './services/api';
 import { LandingPage } from './pages/LandingPage';
 import { SimulationPage } from './pages/SimulationPage';
+import { EvidencePage } from './pages/EvidencePage';
+import { PolicyPage } from './pages/PolicyPage';
+import { ExportsPage } from './pages/ExportsPage';
+import { AuditPage } from './pages/AuditPage';
+import { Rail, ShellView } from './components/layout/Rail';
+import { GalaxyBg } from './components/decor/GalaxyBg';
 
-type View = 'landing' | 'simulation';
+type View = 'landing' | ShellView;
 
 export const App: React.FC = () => {
   const [view, setView] = useState<View>('landing');
   const [systemHealthy, setSystemHealthy] = useState<boolean>(true);
 
   const [roles, setRoles] = useState<Role[]>([]);
+  const [dependencies, setDependencies] = useState<ServiceDependency[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [selectedRole, setSelectedRole] = useState<string>('PaymentServiceRole');
   const [selectedScenario, setSelectedScenario] = useState<DemoScenario>('aws');
 
   const [currentRun, setCurrentRun] = useState<AgentRunResponse | null>(null);
+  const [preview, setPreview] = useState<AgentRunResponse | null>(null);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,6 +38,8 @@ export const App: React.FC = () => {
       try {
         const principalsData = await getPrincipals();
         setRoles(principalsData.roles || []);
+        setDependencies(principalsData.dependencies || []);
+        setWorkflows(principalsData.workflows || []);
       } catch {
         // picker falls back to PaymentServiceRole
       }
@@ -47,19 +58,32 @@ export const App: React.FC = () => {
       setSelectedRole('PaymentServiceRole');
     }
     setCurrentRun(null);
+    setPreview(null);
     setError(null);
   };
 
   const handleSelectRole = (r: string) => {
     setSelectedRole(r);
     setCurrentRun(null);
+    setPreview(null);
     setError(null);
   };
 
   const handleEnterSimulation = () => {
     setCurrentRun(null);
+    setPreview(null);
     setError(null);
-    setView('simulation');
+    setView('run');
+  };
+
+  const handlePreviewRun = async (runId: string) => {
+    try {
+      const runData = await getAgentRun(runId);
+      setPreview(runData);
+      setView('policy');
+    } catch (err: any) {
+      console.error('Failed to fetch run:', err);
+    }
   };
   // Poll async runs until terminal (kept for API parity; default runs are sync)
   const pollAgentRun = async (runId: string, maxAttempts = 60): Promise<AgentRunResponse> => {
@@ -79,7 +103,8 @@ export const App: React.FC = () => {
     setIsRunning(true);
     setError(null);
     setCurrentRun(null);
-    setView('simulation');
+    setPreview(null);
+    setView('run');
 
     const activeScenario = scenarioOverride || selectedScenario;
     const targetGoal =
@@ -118,16 +143,46 @@ export const App: React.FC = () => {
     }
   };
 
+  const displayRun = preview ?? currentRun;
+
+  if (view === 'landing') {
+    return (
+      <div className="min-h-screen bg-black text-slate-100 flex flex-col">
+        <main className="flex-1 w-full">
+          <div key="landing" className="animate-view-enter">
+            <LandingPage onEnter={handleEnterSimulation} />
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-black text-slate-100 flex flex-col">
-      <main className="flex-1 w-full">
+    <div className="min-h-screen bg-black text-slate-100 flex">
+      <GalaxyBg />
+      <Rail view={view} onSelect={(v) => setView(v)} />
+      <main className="flex-1 min-w-0 relative z-10">
+        {preview && (
+          <div className="max-w-3xl mx-auto px-4 sm:px-6 pt-5">
+            <div className="flex items-center justify-between gap-3 rounded-md border border-sky-400/25 bg-sky-400/[0.06] px-3 py-2">
+              <span className="text-[11px] font-mono text-sky-200 truncate">
+                Viewing past run {preview.run_id}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                className="text-[11px] font-mono text-sky-300 hover:text-white transition-colors cursor-pointer shrink-0"
+              >
+                Back to live →
+              </button>
+            </div>
+          </div>
+        )}
         <div
-          key={`${view}-${isRunning ? 'running' : currentRun?.run_id ?? 'idle'}`}
+          key={`${view}-${isRunning ? 'running' : (displayRun?.run_id ?? 'idle')}`}
           className="animate-view-enter"
         >
-          {view === 'landing' && <LandingPage onEnter={handleEnterSimulation} />}
-
-          {view === 'simulation' && (
+          {view === 'run' && (
             <SimulationPage
               roles={roles}
               selectedRole={selectedRole}
@@ -141,6 +196,24 @@ export const App: React.FC = () => {
               error={error}
               systemHealthy={systemHealthy}
             />
+          )}
+
+          {view === 'evidence' && (
+            <EvidencePage
+              roles={roles}
+              dependencies={dependencies}
+              workflows={workflows}
+              selectedRole={selectedRole}
+              displayRun={displayRun}
+            />
+          )}
+
+          {view === 'policy' && <PolicyPage displayRun={displayRun} />}
+
+          {view === 'exports' && <ExportsPage displayRun={displayRun} />}
+
+          {view === 'audit' && (
+            <AuditPage previewId={preview?.run_id ?? null} onPreview={handlePreviewRun} />
           )}
         </div>
       </main>
