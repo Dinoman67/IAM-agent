@@ -631,7 +631,13 @@ def agent_override(req: OverrideRequest, http_req: Request) -> AgentRunResponse:
     if not proposed:
         remove = repl.get("remove_permissions") or cand.get("remove_permissions") or []
         if not remove:
-            raise HTTPException(status_code=400, detail="Halted run recorded no proposal to approve.")
+            stop = orig.stop_reason or ""
+            if stop in ("security_block", "provider_mismatch", "privilege_expansion_blocked"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Halted run recorded no proposal to approve: '{stop}' stops at the security gate before any candidate policy exists, and this halt class cannot be approved in-product by design.",
+                )
+            raise HTTPException(status_code=400, detail="Halted run recorded no proposal to approve: only runs that generated a candidate policy or replan can be overridden.")
 
     env = load_environment()
     role = env.get_role(role_id)
