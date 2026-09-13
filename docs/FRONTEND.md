@@ -29,6 +29,10 @@ by the FastAPI backend; rebuilt with `cd frontend && npm run build`.
    decisive entry** and reflects it (`allow` → verified panel; `deny`/`escalate`
    → held-for-review with proposed chips; `ack` releases native banners).
    Command handling is local UI state; the backend run is never altered.
+4. **Verdict + evidence + artifacts** — verdict banner, REMOVED/KEPT chips that
+   expand to per-change justifications, and download buttons for `policy.json`
+   (final policy), `audit-bundle.json` (hash-chained evidence), and `policy.tf`
+   (Terraform HCL) — all served by live backend endpoints.
 4. **Verdict** — success / blocked / rolled-back / held / assessed-with-limits
    panels + removed-vs-kept chips + replan note + meta line + Run again.
 

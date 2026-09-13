@@ -39,12 +39,24 @@ python main.py --demo aws --mock  # headless killer scenario, deterministic
 ## Demo script (3 minutes)
 
 1. **Landing** — product narrative (problem → solution → stages). Click through.
-2. **Simulation** — pick `Least-privilege fix`, press Run. Narrate: sim fails on
-   `kms:Decrypt` → hidden S3→KMS coupling found → replan → pass → Kernel ALLOW → v2.
-3. **Kernel console** — type `help`, then `allow --reason "demo approved"`.
-   Verdict + before/after appear below.
+2. **Simulation** — pick `Least-privilege fix`, read the scenario card, press Run.
+   Narrate: sim fails on `kms:Decrypt` → hidden S3→KMS coupling found → replan →
+   pass → Kernel ALLOW → type `allow --reason "demo approved"` → verdict.
+3. **Evidence** — click a REMOVED chip to show its justification; download
+   `policy.json` + `audit-bundle.json` live on screen.
 4. **Second cloud** — pick `GCP · local eval`, Run. Same thesis via CMEK.
 5. **Safety proof** — pick `Safety block`, Run. Show the veto + safe-fix path.
+
+## Rehearsal protocol (do once before evaluation day)
+
+1. Reset state: stop server, `rm -f data/iam_runs.db`, start fresh
+   (`STATE_STORE=memory ./start.sh` also works and persists nothing).
+2. Cold run: `pytest -q` green, then click all 6 picker scenarios end to end,
+   completing each kernel gate; confirm all three downloads save real files.
+3. Record a backup screen capture of the full 3-minute script (audio optional).
+4. Day-of kit: charged laptop, `PORT=8080 ./start.sh` fallback, backup video
+   file, this runbook. If venue Wi-Fi dies, everything still runs offline
+   (Google Fonts degrade to system fonts gracefully).
 
 Tip: always hard-refresh (`Ctrl+Shift+R`) after pulling new frontend builds —
 the bundles are content-hashed and browsers cache the old shell otherwise.
