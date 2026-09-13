@@ -18,7 +18,9 @@ by the FastAPI backend; rebuilt with `cd frontend && npm run build`.
   event playback, auto-releasing verdict with tier badge, per-change evidence,
   downloads, scenario explainer cards. Kernel-free by design: the gate lives
   in Review.
-- **`ReviewPage` (Review)** — the single latest halted run, shown big: kind
+- **`ReviewPage` (Review)** — a LAST RUN strip names the most recent run of any
+  kind (kind chip, id, role; successes note "nothing to review"), then the
+  single latest halted run, shown big: kind chip + identity header
   chip + identity header (run, role, provider, halted-at), REQUEST card (goal
   + proposed removals/kept + halt reason), kernel box (decision, blast, named
   rule), commands box (explorers + `allow`/`deny` with mandatory approver and
