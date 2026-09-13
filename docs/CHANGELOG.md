@@ -3,8 +3,9 @@
 ## Unreleased (console rebuild + GCP path)
 
 ### Frontend — minimalist rebuild (`frontend/src`)
-- Replaced the 6-page SOC console with 2 views: narrative landing (`Prune.`,
-  problem → solution → stages on scroll) and a focused simulation console.
+- Landing + 5-section console shell: narrative landing (`Prune.`), then a
+  fixed left rail (Run · Evidence · Policy · Exports · Audit, icon-only on
+  mobile) sharing one run object, with past-run preview + back-to-live.
 - Simulation: role/scenario pickers, FLOW + LIVE LOG twin boxes with timed
   event playback, conditional Security Kernel console with a real command
   interpreter (`help/status/invariants/diff/allow/deny/escalate/ack`),
@@ -13,8 +14,10 @@
 - Evidence per change: REMOVED/KEPT chips expand to recorded justifications.
 - Take-home artifacts: `policy.json`, `audit-bundle.json`, `policy.tf`
   downloads wired to live endpoints on every completed run.
-- Removed: header nav, onboarding modals/tours, dashboard/learn/audit/
-  capabilities pages (left unrouted on disk), marketing-style landing sections.
+- Evidence/Policy/Exports views read the shared run (or preview); Audit lists
+  run history lazily and previews read-only.
+- Removed: header nav, onboarding modals/tours, dashboard/learn/capabilities
+  pages (left unrouted on disk), marketing-style landing sections.
 
 ### Backend — GCP local evaluation
 - New GCP seed (`BillingExportSA`, CMEK coupling, protected resources).

@@ -11,8 +11,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { AgentRunResponse, DemoScenario, Role } from '../types';
-import { exportTerraform, getAuditBundle } from '../services/api';
-import { GalaxyBg } from '../components/decor/GalaxyBg';
+import { DownloadRow } from '../components/run/DownloadRow';
 
 interface SimulationPageProps {
   roles: Role[];
@@ -289,16 +288,12 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
   const [kernelInput, setKernelInput] = useState('');
   const [kernelVerdict, setKernelVerdict] = useState<KernelVerdict | null>(null);
   const [evidencePerm, setEvidencePerm] = useState<string | null>(null);
-  const [dlBusy, setDlBusy] = useState<string | null>(null);
-  const [dlError, setDlError] = useState<string | null>(null);
   useEffect(() => {
     setReveal(0);
     setKernelLog([]);
     setKernelInput('');
     setKernelVerdict(null);
     setEvidencePerm(null);
-    setDlBusy(null);
-    setDlError(null);
     if (!currentRun) return;
     const t = setInterval(() => {
       setReveal((r) => {
@@ -422,53 +417,12 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
     setKernelInput('');
   };
 
-  const saveBlob = (filename: string, text: string, mime: string) => {
-    const blob = new Blob([text], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  };
-
-  const downloadRunFile = async (kind: 'policy' | 'audit' | 'terraform') => {
-    if (!currentRun || dlBusy) return;
-    setDlBusy(kind);
-    setDlError(null);
-    try {
-      const roleId = currentRun.role_id ?? 'role';
-      if (kind === 'policy') {
-        if (!currentRun.policy_diff) throw new Error('No policy diff on this run.');
-        saveBlob(`${roleId}-least-privilege-policy.json`, JSON.stringify(currentRun.policy_diff, null, 2), 'application/json');
-      } else if (kind === 'audit') {
-        const bundle = await getAuditBundle(currentRun.run_id);
-        saveBlob(`audit-bundle-${currentRun.run_id}.json`, JSON.stringify(bundle, null, 2), 'application/json');
-      } else {
-        // Export the REMEDIATED set from this run, not the live broad policy:
-        // each API call loads a fresh environment, so omitting permissions
-        // would snapshot the un-remediated baseline.
-        const pd = currentRun.policy_diff;
-        const proposed = pd ? [...(pd.kept ?? []), ...(pd.added ?? [])] : undefined;
-        const tf = await exportTerraform(roleId, proposed && proposed.length ? proposed : undefined);
-        saveBlob(`${roleId}-least-privilege.tf`, tf.hcl, 'text/plain');
-      }
-    } catch (e: any) {
-      setDlError(e?.message ?? 'Download failed');
-    } finally {
-      setDlBusy(null);
-    }
-  };
-
   const showResult = showResultPre && kernelVerdict !== null;
   const heldByOperator = kernelVerdict !== null && (kernelVerdict.action === 'deny' || kernelVerdict.action === 'escalate');
   const allowedByOperator = kernelVerdict !== null && kernelVerdict.action === 'allow';
 
   return (
-    <div className="relative bg-black min-h-[calc(100vh-4rem)]">
-      <GalaxyBg />
+    <div className="relative min-h-[calc(100vh-4rem)]">
       <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 py-5">
         {/* top row: back + status + run */}
         <div className="flex items-center justify-between gap-3">
@@ -928,28 +882,9 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
             </div>
 
             {/* take-home artifacts — real files from live endpoints */}
-            <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
-              {[
-                { kind: 'policy' as const, label: 'policy.json', enabled: !!currentRun.policy_diff },
-                { kind: 'audit' as const, label: 'audit-bundle.json', enabled: true },
-                { kind: 'terraform' as const, label: 'policy.tf', enabled: true },
-              ].map(({ kind, label, enabled }) => (
-                <button
-                  key={kind}
-                  type="button"
-                  disabled={!enabled || dlBusy !== null}
-                  onClick={() => downloadRunFile(kind)}
-                  title={enabled ? `Download ${label}` : 'Not available for this run outcome'}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/15 hover:border-sky-400/60 hover:text-sky-200 text-slate-300 text-[11px] font-mono transition-colors cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
-                >
-                  {dlBusy === kind ? <Loader2 className="w-3 h-3 animate-spin" /> : <span aria-hidden>↓</span>}
-                  {label}
-                </button>
-              ))}
+            <div className="mt-4 flex justify-center">
+              <DownloadRow run={currentRun} />
             </div>
-            {dlError && (
-              <p className="mt-2 text-center text-[11px] font-mono text-rose-400">{dlError}</p>
-            )}
 
             <div className="mt-6 text-center">
               <button
