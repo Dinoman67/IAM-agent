@@ -1,0 +1,32 @@
+1
+00:00:00,000 --> 00:00:11,750
+Unobserved ≠ unneeded — deleting blind breaks prod at 2AM
+
+2
+00:00:11,750 --> 00:00:21,500
+Prune: autonomous IAM least-privilege mitigator
+
+3
+00:00:21,500 --> 00:00:31,750
+1 · Observe: 7 permissions, 3 wildcards, 4 never logged
+
+4
+00:00:31,750 --> 00:00:43,000
+2 · Simulate: rehearsal FAILS — checkout needs kms:Decrypt
+
+5
+00:00:43,000 --> 00:00:55,417
+3 · Replan: hidden S3→KMS coupling found — keep it, cut the rest
+
+6
+00:00:55,417 --> 00:01:08,917
+4 · Verify: 11 invariants + blast LOW → ALLOW → v2 verified
+
+7
+00:01:08,917 --> 00:01:22,250
+Proof: 7→4 · duel BREACHED→HELD · AWS + GCP · 131 tests green
+
+8
+00:01:22,250 --> 00:01:31,417
+AI proposes. Deterministic controls decide.
+
