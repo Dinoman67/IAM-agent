@@ -71,8 +71,9 @@ class DeterministicReasoner:
     9. complete
     """
 
-    def __init__(self, target_role_id: str = "PaymentServiceRole") -> None:
+    def __init__(self, target_role_id: str = "PaymentServiceRole", apply_confidence: float = 0.98) -> None:
         self.default_role_id = target_role_id
+        self.apply_confidence = apply_confidence
 
     def _resolve_role_id(self, state: AgentState) -> str:
         if state.current_role:
@@ -214,7 +215,7 @@ class DeterministicReasoner:
                         "Simulation passed for revised policy. Applying least-privilege changes "
                         f"to create new policy version for '{role_id}'."
                     ),
-                    confidence=0.98,
+                    confidence=self.apply_confidence,
                 )
             else:
                 return Decision(

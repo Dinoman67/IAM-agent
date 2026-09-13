@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (Human Review + break-glass override)
+
+- Backend: `SecurityKernel.evaluate_proposal` accepts scoped `human_approval`
+  (never bypasses protected-permission removal, expansion, provider mismatch,
+  failed verification, or stale state); new `POST /api/agent/override`
+  endpoint records halted → approved → applied → verified as a new run;
+  `lowconf` scenario produces an approvable halt; CLI `--demo lowconf`.
+- Frontend: kernel console moved out of Run into a badge-notified Review
+  section (halted runs only); `allow` executes real overrides with mandatory
+  approver + reason, `deny` records refusal; Run page keeps verdicts,
+  evidence, downloads. Rail adds Review with blocked-only badge.
+- Tests: `tests/test_override.py` (6 tests); suite 137 passing.
+
 ## Unreleased (console rebuild + GCP path)
 
 ### Frontend — minimalist rebuild (`frontend/src`)

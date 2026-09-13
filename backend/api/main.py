@@ -40,8 +40,10 @@ from backend.scenarios import (
     StaleStateReasoner,
     normalize_scenario,
 )
-from backend.security.diff import PolicyDiff
+from backend.security.analyzer import SecurityAnalyzer
+from backend.security.diff import PolicyDiff, compute_policy_diff
 from backend.security.kernel import SecurityKernel
+from backend.security.verification import ExtendedPolicyVerifier
 from backend.state.models import AgentState, AuditEvent
 from backend.state.store import InMemoryStateStore, JSONFileStateStore, SQLiteStateStore
 from backend.tools.iam_tools import create_extended_tool_registry
@@ -139,7 +141,7 @@ class AgentRunRequest(BaseModel):
     )
     scenario: Optional[str] = Field(
         default="aws",
-        description="Execution scenario: 'aws', 'safety_block', 'rollback', 'stale_state', 'unsupported_gcp', 'provider_mismatch'",
+        description="Execution scenario: 'aws', 'gcp', 'gcp_recovery', 'lowconf', 'safety_block', 'rollback', 'stale_state', 'unsupported_gcp', 'provider_mismatch'",
     )
     async_run: Optional[bool] = Field(
         default=False,
@@ -468,7 +470,24 @@ def _execute_run(
             provider="gcp",
         )
 
-    # 8. Default AWS Autonomous Remediation Killer Demo
+    # 8. Low-confidence hold: valid proposal, sub-threshold confidence -> human gate.
+    # Produces an OVERRIDABLE halt with a recorded proposal (for the Review flow).
+    elif scenario == "lowconf":
+        controller = AgentController(
+            reasoner=DeterministicReasoner(target_role_id=request.role_id, apply_confidence=0.85),
+            tool_registry=tool_registry,
+            state_store=state_store,
+            event_callback=on_event,
+            environment=env,
+            provider=request.provider,
+        )
+        return controller.run(
+            goal=request.goal or f"Propose least privilege for {request.role_id} at reduced confidence.",
+            role_id=request.role_id,
+            provider=request.provider,
+        )
+
+    # 9. Default AWS Autonomous Remediation Killer Demo
     else:
         if request.use_mock or os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes"):
             reasoner = DeterministicReasoner(target_role_id=request.role_id)
@@ -550,6 +569,183 @@ def get_run(run_id: str) -> AgentRunResponse:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
 
     return _extract_response_from_state(state)
+
+
+class OverrideRequest(BaseModel):
+    run_id: str = Field(..., description="Halted run whose recorded proposal should be human-approved")
+    approved_by: str = Field(..., description="Human approver identity (required)")
+    reason: str = Field(..., description="Approval justification (required)")
+
+
+def _capabilities_for(provider_name: str):
+    name = (provider_name or "aws").lower()
+    if name == "gcp":
+        return GCP_CAPABILITIES
+    if name == "azure":
+        return AZURE_CAPABILITIES
+    return AWS_CAPABILITIES
+
+
+@app.post("/api/agent/override", response_model=AgentRunResponse)
+def agent_override(req: OverrideRequest, http_req: Request) -> AgentRunResponse:
+    """Break-glass human override: apply a halted run's recorded proposal with approval.
+
+    The kernel re-evaluates with the approval context. Load-bearing violations
+    (protected-permission removal, privilege expansion, provider mismatch, failed
+    verification, stale state) can NEVER be overridden — those refuse deterministically.
+    Approval without identity or reason is rejected. The original run is untouched;
+    the override is recorded as a new run chaining halted -> approved -> applied.
+    """
+    _require_api_key(http_req)
+    approver = (req.approved_by or "").strip()
+    reason = (req.reason or "").strip()
+    if not approver or not reason:
+        raise HTTPException(status_code=400, detail="approved_by and reason are both required.")
+    if len(approver) > 120 or len(reason) > 500:
+        raise HTTPException(status_code=400, detail="approved_by (<=120) or reason (<=500) too long.")
+
+    orig = state_store.get(req.run_id)
+    if not orig:
+        raise HTTPException(status_code=404, detail=f"Run '{req.run_id}' not found.")
+    if orig.current_phase != "FAILED":
+        raise HTTPException(status_code=400, detail="Only halted (FAILED) runs can be overridden.")
+    if any(e.event_type == "policy_applied" for e in orig.audit_trail):
+        raise HTTPException(status_code=400, detail="Run already applied a policy; override unavailable.")
+
+    role_id = orig.current_role or ""
+    repl = (orig.replans or [{}])[-1]
+    cand = (orig.candidate_policy_changes or [{}])[-1]
+    proposed = repl.get("proposed_permissions") or cand.get("proposed_permissions")
+    if not proposed:
+        remove = repl.get("remove_permissions") or cand.get("remove_permissions") or []
+        if not remove:
+            raise HTTPException(status_code=400, detail="Halted run recorded no proposal to approve.")
+
+    env = load_environment()
+    role = env.get_role(role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail=f"Role '{role_id}' not found.")
+    if proposed is None:
+        current = role.active_permissions()
+        proposed = [p for p in current if p not in remove]
+
+    caps = _capabilities_for(orig.provider)
+    bundles = SecurityAnalyzer(env).analyze_role(role_id, simulation_results=orig.simulation_results)
+    last_sim = orig.simulation_results[-1] if orig.simulation_results else None
+
+    gate = SecurityKernel(env, capabilities=caps).evaluate_proposal(
+        role_id=role_id,
+        proposed_permissions=list(proposed),
+        planned_policy_version=role.current_version,
+        confidence=1.0,
+        simulation_result=last_sim,
+        risk_level="medium",
+        provider=caps.provider_name,
+        evidence_bundles=bundles,
+        human_approval={"approved_by": approver, "reason": reason},
+    )
+
+    import uuid as _uuid
+
+    new_state = AgentState(
+        run_id=f"run-{_uuid.uuid4().hex[:8]}",
+        goal=f"Human-approved override of halted run {orig.run_id}",
+        current_role=role_id,
+        provider=caps.provider_name,
+        current_phase="VERIFYING",
+    )
+    new_state.record_event(
+        event_type="escalate",
+        summary=f"Halted run {orig.run_id} claimed for human review by '{approver}': {reason}",
+        relevant_ids={"role_id": role_id, "origin_run_id": orig.run_id},
+        details={"stop_reason": orig.stop_reason, "approved_by": approver, "reason": reason},
+        actor="human",
+    )
+    new_state.record_event(
+        event_type="security_check",
+        summary=f"Security Kernel re-evaluated with break-glass approval: decision={gate.decision.upper()}",
+        relevant_ids={"role_id": role_id},
+        details=gate.model_dump(),
+        actor="security_kernel",
+        reason=gate.reason,
+        confidence=gate.confidence,
+    )
+
+    if gate.decision != "allow":
+        new_state.current_phase = "FAILED"
+        new_state.stop_reason = "override_refused"
+        new_state.final_outcome = {
+            "status": "failed",
+            "stop_reason": "override_refused",
+            "message": f"Override refused deterministically: {gate.reason_codes}",
+            "details": gate.model_dump(),
+        }
+        new_state.record_event(
+            event_type="security_gate_denied",
+            summary=f"Break-glass override refused: {gate.reason_codes}",
+            relevant_ids={"role_id": role_id},
+            details=gate.model_dump(),
+            actor="security_kernel",
+        )
+        state_store.save(new_state)
+        return _extract_response_from_state(new_state)
+
+    applied = env.apply_policy_version(role_id, list(proposed), f"Human-approved override by {approver}: {reason}")
+    new_state.record_event(
+        event_type="policy_applied",
+        summary=f"Applied policy version {applied.version_id} to {role_id} under break-glass approval",
+        relevant_ids={"role_id": role_id, "version_id": applied.version_id},
+        details=applied.model_dump(),
+        actor="agent",
+    )
+    prior = role.policy_versions[-2] if len(role.policy_versions) >= 2 else None
+    new_state.policy_diff = compute_policy_diff(
+        role_id=role_id,
+        from_version=prior.version_id if prior else applied.version_id,
+        to_version=applied.version_id,
+        original_permissions=list(prior.permissions) if prior else list(proposed),
+        new_permissions=list(proposed),
+        provider=caps.provider_name,
+    ).model_dump()
+
+    verify_data = ExtendedPolicyVerifier(env, capabilities=caps).verify_remediation(
+        role_id=role_id, expected_permissions=list(proposed), provider=caps.provider_name
+    ).model_dump()
+    new_state.verification_result = verify_data
+    if verify_data.get("passed", False):
+        new_state.record_event(
+            event_type="verification_passed",
+            summary="Deterministic verification passed on human-approved override.",
+            relevant_ids={"role_id": role_id},
+            details=verify_data,
+            actor="verifier",
+        )
+        new_state.current_phase = "COMPLETED"
+        new_state.stop_reason = "verified_success"
+        new_state.final_outcome = {
+            "status": "success",
+            "stop_reason": "verified_success",
+            "message": f"Human-approved override applied and verified (approver '{approver}').",
+            "details": {"override": {"approved_by": approver, "reason": reason, "of_run": orig.run_id}},
+        }
+    else:
+        new_state.record_event(
+            event_type="verification_failed",
+            summary=f"Post-override verification failed: {verify_data.get('details')}",
+            relevant_ids={"role_id": role_id},
+            details=verify_data,
+            actor="verifier",
+        )
+        new_state.current_phase = "FAILED"
+        new_state.stop_reason = "override_verification_failed"
+        new_state.final_outcome = {
+            "status": "failed",
+            "stop_reason": "override_verification_failed",
+            "message": "Override applied but post-apply verification failed; manual review required.",
+            "details": verify_data,
+        }
+    state_store.save(new_state)
+    return _extract_response_from_state(new_state)
 
 
 # ---------------- Hero features: live AWS, attack graph, temporal, Terraform PR ----------------

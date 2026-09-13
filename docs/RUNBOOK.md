@@ -41,18 +41,21 @@ python main.py --demo aws --mock  # headless killer scenario, deterministic
 1. **Landing** — product narrative (problem → solution → stages). Click through.
 2. **Simulation** — pick `Least-privilege fix`, read the scenario card, press Run.
    Narrate: sim fails on `kms:Decrypt` → hidden S3→KMS coupling found → replan →
-   pass → Kernel ALLOW → type `allow --reason "demo approved"` → verdict.
+   pass → verdict auto-releases with `Standard — auto-applied · human actions: 0`.
 3. **Evidence** — click a REMOVED chip to show its justification; download
    `policy.json` + `audit-bundle.json` live on screen.
 4. **Second cloud** — pick `GCP · local eval`, Run. Same thesis via CMEK.
-5. **Safety proof** — pick `Safety block`, Run. Show the veto + safe-fix path.
+5. **Safety proof** — pick `Safety block`, Run. Veto + `Sensitive` tier badge.
+6. **Human Review climax** — pick `Low-confidence hold`, Run, open the badged
+   Review tab, approve with name + reason, show the verified override outcome.
 
 ## Rehearsal protocol (do once before evaluation day)
 
 1. Reset state: stop server, `rm -f data/iam_runs.db`, start fresh
    (`STATE_STORE=memory ./start.sh` also works and persists nothing).
-2. Cold run: `pytest -q` green, then click all 6 picker scenarios end to end,
-   completing each kernel gate; confirm all three downloads save real files.
+2. Cold run: `pytest -q` green, then click all 7 picker scenarios end to end;
+   complete the Review override walkthrough (approve + refusal paths); confirm
+   all three downloads save real files.
 3. Record a backup screen capture of the full 3-minute script (audio optional).
 4. Day-of kit: charged laptop, `PORT=8080 ./start.sh` fallback, backup video
    file, this runbook. If venue Wi-Fi dies, everything still runs offline
@@ -64,10 +67,12 @@ the bundles are content-hashed and browsers cache the old shell otherwise.
 ## CLI scenarios
 
 ```bash
-python main.py --demo aws|gcp|safety-block|rollback|stale-state|unsupported-gcp|provider-mismatch
+python main.py --demo aws|gcp|lowconf|safety-block|rollback|stale-state|unsupported-gcp|provider-mismatch
 python main.py --demo gcp-recovery   # honest GCP recovery via re-binding
 python main.py --duel --fleet --temporal --attack-graph --live-status
 python main.py --export-tf policy.tf --export-rego iam.rego
+# Break-glass override (approves a halted run; see docs/PRODUCT_OVERVIEW.md §7):
+#   POST /api/agent/override {"run_id": "...", "approved_by": "name", "reason": "..."}
 ```
 
 ## Key environment variables (see `.env.example`)

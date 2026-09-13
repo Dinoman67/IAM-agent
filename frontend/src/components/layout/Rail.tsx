@@ -1,7 +1,7 @@
 import React from 'react';
-import { Activity, FileDown, FileText, History, ShieldCheck } from 'lucide-react';
+import { Activity, FileDown, FileText, History, Inbox, ShieldCheck } from 'lucide-react';
 
-export type ShellView = 'run' | 'evidence' | 'policy' | 'exports' | 'audit';
+export type ShellView = 'run' | 'evidence' | 'policy' | 'exports' | 'audit' | 'review';
 
 const ITEMS: Array<{ id: ShellView; label: string; icon: React.ReactNode }> = [
   { id: 'run', label: 'Run', icon: <Activity className="w-4 h-4" /> },
@@ -9,9 +9,14 @@ const ITEMS: Array<{ id: ShellView; label: string; icon: React.ReactNode }> = [
   { id: 'policy', label: 'Policy', icon: <ShieldCheck className="w-4 h-4" /> },
   { id: 'exports', label: 'Exports', icon: <FileDown className="w-4 h-4" /> },
   { id: 'audit', label: 'Audit', icon: <History className="w-4 h-4" /> },
+  { id: 'review', label: 'Review', icon: <Inbox className="w-4 h-4" /> },
 ];
 
-export const Rail: React.FC<{ view: ShellView; onSelect: (v: ShellView) => void }> = ({ view, onSelect }) => (
+export const Rail: React.FC<{ view: ShellView; onSelect: (v: ShellView) => void; badge?: number }> = ({
+  view,
+  onSelect,
+  badge = 0,
+}) => (
   <nav aria-label="Console sections" className="sticky top-0 h-screen shrink-0 w-14 md:w-52 border-r border-white/10 bg-black flex flex-col py-5 px-2 md:px-3 gap-1">
     <div className="px-2 md:px-3 pb-4 hidden md:block">
       <div className="text-sm font-extrabold text-white tracking-tight">
@@ -38,7 +43,14 @@ export const Rail: React.FC<{ view: ShellView; onSelect: (v: ShellView) => void 
               : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.04]'
           }`}
         >
-          <span className="shrink-0">{item.icon}</span>
+          <span className="shrink-0 relative">
+            {item.icon}
+            {item.id === 'review' && badge > 0 && (
+              <span className="absolute -top-1.5 -right-2 min-w-[1rem] h-4 px-0.5 rounded-full bg-amber-400 text-black text-[10px] font-mono font-bold flex items-center justify-center animate-pulse">
+                {badge > 9 ? '9+' : badge}
+              </span>
+            )}
+          </span>
           <span className="hidden md:block font-mono text-[13px]">{item.label}</span>
         </button>
       );

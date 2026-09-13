@@ -78,6 +78,7 @@ class SecurityKernel:
         proposed_resources: Optional[Sequence[str]] = None,
         baseline_scope: Optional[str] = None,
         proposed_scope: Optional[str] = None,
+        human_approval: Optional[Dict[str, Any]] = None,
     ) -> SecurityGateResult:
         """Deterministically evaluates if proposed policy change is authorized for application.
         
@@ -317,6 +318,52 @@ class SecurityKernel:
         # -------------------------------------------------------------
         # Gate Decision Logic
         # -------------------------------------------------------------
+        # Break-glass human override: a named approver with a recorded reason
+        # may authorize OVERRIDABLE halts only. load-bearing violations can
+        # never be overridden — the firewall has no bypass button for them.
+        UNOVERRIDABLE_MARKERS = (
+            "protected_permission_removed",
+            "unauthorized_privilege_expansion",
+            "provider_mismatch",
+            "sensitive_resource_exposed",
+            "simulation_failed",
+            "unsimulated_change",
+            "regression_test_failed",
+            "stale_state",
+            "blast_radius_critical",
+            "role_not_found",
+        )
+        approval = human_approval or {}
+        approver = str(approval.get("approved_by") or "").strip()
+        approval_reason = str(approval.get("reason") or "").strip()
+        unoverridable_hits = [c for c in reason_codes if any(m in c for m in UNOVERRIDABLE_MARKERS)]
+        # Approval also waives sub-threshold confidence: the human review itself
+        # is the confidence basis (recorded in the audit trail).
+        needs_waiver = bool(reason_codes) or confidence < 0.90
+        if approver and approval_reason and needs_waiver and not unoverridable_hits:
+            return SecurityGateResult(
+                allowed=True,
+                decision="allow",
+                reason=(
+                    f"Security Kernel AUTHORIZED by human break-glass override "
+                    f"(approver '{approver}': {approval_reason})."
+                ),
+                reason_codes=[],
+                required_approval=False,
+                risk_level=risk_level,
+                confidence=confidence,
+                blast_radius=evaluated_blast,
+                violated_invariants=[],
+                required_verification=["post_apply_verification"],
+                escalation_reason=None,
+                details={
+                    **details,
+                    "human_override": {"approved_by": approver, "reason": approval_reason},
+                    "waived_invariants": [v.id for v in violated_invariants],
+                    "waived_codes": list(reason_codes),
+                },
+            )
+
         # Hard Deny Conditions: cannot be bypassed
         hard_deny_codes = [
             c for c in reason_codes

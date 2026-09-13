@@ -80,7 +80,10 @@ Yes, and the tiers are the proof. The engine sorts every proposed change by itse
 
 There is no human prompt, inbox, or approval click anywhere in the backend loop
 (`human_approval_required` is a terminal stop-reason label, not a waiting state —
-the CLI demos and all 131 tests run headless). The kernel command console in the
-UI is an explicitly labeled sandbox for exploring the gate after the fact; the
-verdict always releases on its own. Removals need no one; security changes stop
-for someone — and the gate, not a person, tells them apart.
+the CLI demos and all tests run headless). When a run halts, it waits in the
+**Human Review** console section (badge-notified, successes never notify), where
+a named approver with a recorded reason can execute a real break-glass override
+run — except load-bearing denials (protected-permission removal, privilege
+expansion, provider mismatch, failed verification), which refuse deterministically
+and cannot be approved in-product, by design. Removals need no one; security
+changes stop for someone — and the gate, not a person, tells them apart.

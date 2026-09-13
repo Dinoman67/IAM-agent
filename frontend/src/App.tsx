@@ -1,16 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { AgentRunResponse, DemoScenario, Role, ServiceDependency, Workflow } from './types';
-import { checkHealth, getAgentRun, getPrincipals, triggerAgentRun } from './services/api';
+import { AgentRunResponse, DemoScenario, Role, RunSummary, ServiceDependency, Workflow } from './types';
+import { checkHealth, getAgentRun, getPrincipals, listRuns, triggerAgentRun } from './services/api';
 import { LandingPage } from './pages/LandingPage';
 import { SimulationPage } from './pages/SimulationPage';
 import { EvidencePage } from './pages/EvidencePage';
 import { PolicyPage } from './pages/PolicyPage';
 import { ExportsPage } from './pages/ExportsPage';
 import { AuditPage } from './pages/AuditPage';
+import { ReviewPage } from './pages/ReviewPage';
 import { Rail, ShellView } from './components/layout/Rail';
 import { GalaxyBg } from './components/decor/GalaxyBg';
+import { isHaltedRun } from './components/kernel/model';
 
 type View = 'landing' | ShellView;
+
+const REVIEWED_KEY = 'prune_reviewed_ids';
+
+const loadReviewed = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(REVIEWED_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+};
 
 export const App: React.FC = () => {
   const [view, setView] = useState<View>('landing');
@@ -26,6 +39,35 @@ export const App: React.FC = () => {
   const [preview, setPreview] = useState<AgentRunResponse | null>(null);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [summaries, setSummaries] = useState<RunSummary[]>([]);
+  const [reviewed, setReviewed] = useState<Set<string>>(() => loadReviewed());
+
+  const refreshRuns = async () => {
+    try {
+      const data = await listRuns();
+      setSummaries(data.runs || []);
+    } catch {
+      // badge/queue degrade silently; Review shows its own error state
+    }
+  };
+
+  const markReviewed = (runId: string) => {
+    setReviewed((prev) => {
+      if (prev.has(runId)) return prev;
+      const next = new Set(prev);
+      next.add(runId);
+      try {
+        localStorage.setItem(REVIEWED_KEY, JSON.stringify([...next]));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const reviewBadge = summaries.filter(
+    (r) => isHaltedRun(r.stop_reason) && !reviewed.has(r.run_id),
+  ).length;
 
   useEffect(() => {
     (async () => {
@@ -43,6 +85,7 @@ export const App: React.FC = () => {
       } catch {
         // picker falls back to PaymentServiceRole
       }
+      void refreshRuns();
     })();
     // NOTE: no autoplay — a run starts only when the Run button is pressed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,6 +159,8 @@ export const App: React.FC = () => {
         ? `Demonstrate automated rollback on verification regression.`
         : activeScenario === 'stale_state'
         ? `Demonstrate optimistic concurrency handling on modified policy state.`
+        : activeScenario === 'lowconf'
+        ? `Propose least privilege for ${selectedRole} at reduced confidence.`
         : activeScenario === 'unsupported_gcp'
         ? `Audit and minimize GCP role permissions safely.`
         : `Attempt applying foreign Azure role assignment to AWS infrastructure.`;
@@ -140,6 +185,7 @@ export const App: React.FC = () => {
       setError(err.message || 'Remediation execution failed');
     } finally {
       setIsRunning(false);
+      void refreshRuns();
     }
   };
 
@@ -160,7 +206,14 @@ export const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-black text-slate-100 flex">
       <GalaxyBg />
-      <Rail view={view} onSelect={(v) => setView(v)} />
+      <Rail
+        view={view}
+        badge={reviewBadge}
+        onSelect={(v) => {
+          setView(v);
+          if (v === 'review' || v === 'audit') void refreshRuns();
+        }}
+      />
       <main className="flex-1 min-w-0 relative z-10">
         {preview && (
           <div className="max-w-3xl mx-auto px-4 sm:px-6 pt-5">
@@ -214,6 +267,17 @@ export const App: React.FC = () => {
 
           {view === 'audit' && (
             <AuditPage previewId={preview?.run_id ?? null} onPreview={handlePreviewRun} />
+          )}
+
+          {view === 'review' && (
+            <ReviewPage
+              summaries={summaries}
+              onReviewed={markReviewed}
+              onViewRun={(run) => {
+                setPreview(run);
+                setView('policy');
+              }}
+            />
           )}
         </div>
       </main>

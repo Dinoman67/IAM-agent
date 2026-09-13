@@ -223,6 +223,43 @@ def run_aws_demo(role_id: str = "PaymentServiceRole", use_mock: bool = False) ->
     return 0 if state.current_phase == "COMPLETED" else 1
 
 
+def run_lowconf_demo(role_id: str = "PaymentServiceRole") -> int:
+    """Demo: valid proposal at sub-threshold confidence halts for human review (overridable)."""
+    global step_counter, simulation_count
+    step_counter = 0
+    simulation_count = 0
+
+    print("=" * 70)
+    print("DEMO: LOW-CONFIDENCE HOLD (OVERRIDABLE VIA HUMAN REVIEW)")
+    print("=" * 70)
+
+    env = load_environment()
+    tool_registry = create_extended_tool_registry(env)
+
+    controller = AgentController(
+        reasoner=DeterministicReasoner(target_role_id=role_id, apply_confidence=0.85),
+        tool_registry=tool_registry,
+        event_callback=format_cli_output,
+        environment=env,
+        provider="aws",
+    )
+
+    state = controller.run(
+        goal=f"Propose least privilege for {role_id} at reduced confidence.",
+        role_id=role_id,
+        provider="aws",
+    )
+
+    print("-" * 70)
+    print("HOLD AUDIT (approve via POST /api/agent/override):")
+    print(f"  final phase:    {state.current_phase}")
+    print(f"  stop reason:    {state.stop_reason}")
+    cand = (state.replans or state.candidate_policy_changes or [{}])[-1]
+    print(f"  recorded proposal: {cand.get('proposed_permissions')}")
+    print("-" * 70)
+    return 0 if state.stop_reason in ("human_approval_required", "high_risk") else 1
+
+
 def run_unsupported_gcp_demo() -> int:
     """Demo 2: Safe handling of unsupported provider capability on GCP."""
     global step_counter, simulation_count
@@ -522,7 +559,7 @@ def main() -> None:
         "--demo",
         type=str,
         default="aws",
-        choices=["aws", "gcp", "gcp-recovery", "safety-block", "rollback", "stale-state", "unsupported-gcp", "provider-mismatch"],
+        choices=["aws", "gcp", "gcp-recovery", "lowconf", "safety-block", "rollback", "stale-state", "unsupported-gcp", "provider-mismatch"],
         help="Demo scenario to execute (default: aws)",
     )
     parser.add_argument(
@@ -659,6 +696,8 @@ def main() -> None:
         exit_code = run_rollback_demo()
     elif args.demo == "stale-state":
         exit_code = run_stale_state_demo()
+    elif args.demo == "lowconf":
+        exit_code = run_lowconf_demo(role_id=args.role)
     else:
         exit_code = run_aws_demo(role_id=args.role, use_mock=args.mock)
 
