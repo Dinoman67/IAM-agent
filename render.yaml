@@ -1,0 +1,23 @@
+# One-click Render blueprint: New → Blueprint → connect IAM-agent repo.
+# Free web service. Sleeps when idle (~50s cold start), wakes on request.
+services:
+  - type: web
+    name: prune-iam-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    plan: free
+    envVars:
+      - key: MOCK_LLM
+        value: "true"
+      - key: STATE_STORE
+        value: memory
+      - key: RATE_LIMIT_PER_MIN
+        value: "30"
+      # Set after first deploy is not needed — same-origin not used here.
+      # IMPORTANT: set ALLOWED_ORIGINS to your frontend Space URL, e.g.:
+      # - key: ALLOWED_ORIGINS
+      #   value: https://Dinoman1221-prune-iam-console.hf.space
+      - key: PYTHON_VERSION
+        value: 3.12.12
