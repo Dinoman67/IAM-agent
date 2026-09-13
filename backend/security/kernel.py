@@ -143,6 +143,14 @@ class SecurityKernel:
             }
 
         # 3. Comprehensive Privilege Expansion Check
+        # Restoration of permissions the role held in a PRIOR version is not
+        # expansion (all other gates — simulation, regression, protected
+        # resources, evidence — still apply). This enables honest recovery by
+        # re-binding a previously held least-privilege set.
+        historical_perms: set = set()
+        for v in role.policy_versions:
+            historical_perms.update(v.permissions or [])
+
         expansion_result = check_privilege_expansion(
             baseline=list(original_perms),
             proposed=proposed_permissions,
@@ -153,12 +161,21 @@ class SecurityKernel:
         )
 
         expansion = proposed_perms_set - original_perms
-        if expansion or expansion_result.is_expanded:
+        restored = {p for p in expansion if p in historical_perms}
+        true_expansion = expansion - restored
+        if restored:
+            details["restored_permissions"] = sorted(restored)
+        # Non-action dimensions (resources/scopes/conditions) are unaffected by
+        # restoration and keep their original strictness.
+        non_action_expansion = [
+            t for t in expansion_result.expansion_types if t != "action_expansion"
+        ]
+        if true_expansion or non_action_expansion:
             violated_invariants.append(INVARIANT_NO_PRIVILEGE_EXPANSION)
             escalation_reason = EscalationReason.PRIVILEGE_EXPANSION.value
-            for p in sorted(list(expansion)):
+            for p in sorted(list(true_expansion)):
                 reason_codes.append(f"unauthorized_privilege_expansion:{p}")
-            details["privilege_expansion"] = list(expansion)
+            details["privilege_expansion"] = sorted(true_expansion)
             details["expansion_analysis"] = expansion_result.model_dump()
 
         # 4. Protected Permissions Check (Configurable)
@@ -193,15 +210,31 @@ class SecurityKernel:
             details["exposed_sensitive_resources"] = exposed_resources
 
         # 6. Provider Capabilities Check
+        # Providers with sandbox local evaluation emulate versioning/impact
+        # analysis deterministically; the sandbox records this substitution
+        # instead of treating emulated capabilities as violations.
+        local_eval = bool(getattr(self.capabilities, "supports_local_evaluation", False))
         if not self.capabilities.supports_policy_simulation and simulation_result is None:
             reason_codes.append("unsupported_capability_no_simulation")
             escalation_reason = EscalationReason.UNSUPPORTED_PROVIDER_OPERATION.value
         if not self.capabilities.supports_policy_versioning:
-            reason_codes.append("unsupported_capability_no_versioning")
-            escalation_reason = EscalationReason.UNSUPPORTED_PROVIDER_OPERATION.value
+            if local_eval:
+                details["local_evaluation_versioning"] = (
+                    "Sandbox emulates policy revisions for local evaluation; "
+                    "native provider versioning not claimed."
+                )
+            else:
+                reason_codes.append("unsupported_capability_no_versioning")
+                escalation_reason = EscalationReason.UNSUPPORTED_PROVIDER_OPERATION.value
         if not self.capabilities.supports_rollback:
-            reason_codes.append("unsupported_capability_no_rollback")
-            escalation_reason = EscalationReason.UNSUPPORTED_PROVIDER_OPERATION.value
+            if local_eval:
+                details["local_evaluation_rollback"] = (
+                    "Sandbox has no atomic rollback; recovery proceeds by re-binding "
+                    "prior permissions through the standard apply path."
+                )
+            else:
+                reason_codes.append("unsupported_capability_no_rollback")
+                escalation_reason = EscalationReason.UNSUPPORTED_PROVIDER_OPERATION.value
 
         # 7. Simulation Verification Check
         if simulation_result is not None:

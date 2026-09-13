@@ -30,6 +30,11 @@ class ProviderCapabilities(BaseModel):
     supports_policy_simulation: bool = Field(
         default=True, description="Whether provider supports pre-commit authorization simulation"
     )
+    supports_local_evaluation: bool = Field(
+        default=False,
+        description="Whether the deterministic sandbox may evaluate policy impact locally "
+        "(sandbox-emulated versioning/impact analysis; distinct from native provider simulation)",
+    )
     supports_policy_validation: bool = Field(default=True)
     supports_policy_preview: bool = Field(
         default=True, description="Whether provider supports generating dry-run policy previews"
@@ -204,6 +209,26 @@ class ProviderCapabilities(BaseModel):
                 risk="read_only",
             )
 
+        # Local sandbox evaluation (explicitly NOT native provider simulation)
+        if op in ("evaluate_local_policy", "evaluate_local", "local_evaluation"):
+            if self.supports_local_evaluation:
+                return CapabilityStatus(
+                    provider=self.provider_name,
+                    operation=operation,
+                    supported=True,
+                    reason="Local sandbox policy evaluation supported via deterministic engine (not native provider simulation)",
+                    limitations=["Sandbox-emulated impact analysis only", "No native version history or atomic rollback"],
+                    risk="simulation",
+                )
+            return CapabilityStatus(
+                provider=self.provider_name,
+                operation=operation,
+                supported=False,
+                reason=f"Local {self.provider_name.upper()} evaluation is not enabled",
+                limitations=["Local evaluation not enabled for this provider"],
+                risk="unsupported",
+            )
+
         # Fallback for generic operation
         return CapabilityStatus(
             provider=self.provider_name,
@@ -247,6 +272,7 @@ GCP_CAPABILITIES = ProviderCapabilities(
     supports_role_inspection=True,
     supports_binding_inspection=True,
     supports_policy_simulation=False,  # GCP IAM requires security health analytics or live policy simulator
+    supports_local_evaluation=True,  # Sandbox deterministic evaluation enabled (labeled, not native)
     supports_policy_validation=True,   # Validates role bindings and IAM members
     supports_policy_preview=True,
     supports_resource_scoping=True,

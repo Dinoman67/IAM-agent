@@ -32,6 +32,9 @@ from backend.security.temporal import classify_permissions
 from backend.scenarios import (
     BrokenPolicyReasoner,
     CrossProviderMismatchReasoner,
+    GCP_DEMO_ROLE_ID,
+    GCPDeterministicReasoner,
+    GCPRecoveryReasoner,
     GCPSimulationAttemptReasoner,
     SensitiveAdminRemovalReasoner,
     StaleStateReasoner,
@@ -431,7 +434,41 @@ def _execute_run(
             provider=request.provider,
         )
 
-    # 6. Default AWS Autonomous Remediation Killer Demo
+    # 6. GCP Autonomous Remediation (local sandbox evaluation, labeled)
+    elif scenario == "gcp":
+        target_role = request.role_id if request.role_id not in ("PaymentServiceRole", "") else GCP_DEMO_ROLE_ID
+        controller = AgentController(
+            reasoner=GCPDeterministicReasoner(target_role_id=target_role),
+            tool_registry=tool_registry,
+            state_store=state_store,
+            event_callback=on_event,
+            environment=env,
+            provider="gcp",
+        )
+        return controller.run(
+            goal=request.goal or f"Make {target_role} least privilege without breaking required export workflows.",
+            role_id=target_role,
+            provider="gcp",
+        )
+
+    # 7. GCP Honest Recovery (re-bind prior correct bindings; no atomic rollback on GCP)
+    elif scenario == "gcp_recovery":
+        target_role = request.role_id if request.role_id not in ("PaymentServiceRole", "") else GCP_DEMO_ROLE_ID
+        controller = AgentController(
+            reasoner=GCPRecoveryReasoner(target_role_id=target_role),
+            tool_registry=tool_registry,
+            state_store=state_store,
+            event_callback=on_event,
+            environment=env,
+            provider="gcp",
+        )
+        return controller.run(
+            goal=request.goal or "Demonstrate honest GCP recovery by re-binding correct policy after failed verification.",
+            role_id=target_role,
+            provider="gcp",
+        )
+
+    # 8. Default AWS Autonomous Remediation Killer Demo
     else:
         if request.use_mock or os.getenv("MOCK_LLM", "false").lower() in ("true", "1", "yes"):
             reasoner = DeterministicReasoner(target_role_id=request.role_id)

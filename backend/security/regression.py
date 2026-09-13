@@ -162,79 +162,134 @@ def create_default_regression_suite(
                 )
             )
 
-    # Positive test: S3 KMS encrypted object processing
-    suite.add_test(
-        PolicyRegressionTest(
-            name="payment_encrypted_object_access",
-            description="Preserve transitive KMS SSE decryption when accessing transaction S3 bucket",
-            test_type="positive",
-            required_actions=["s3:GetObject", "kms:Decrypt"],
-            expected_allowed=True,
-            role_id=role_id,
-            tags=["operational", "encryption", "dependency"],
+    # Positive test: S3 KMS encrypted object processing (AWS demo role only —
+    # GCP roles use their own CMEK positive test below)
+    if role_id in (None, "PaymentServiceRole"):
+        suite.add_test(
+            PolicyRegressionTest(
+                name="payment_encrypted_object_access",
+                description="Preserve transitive KMS SSE decryption when accessing transaction S3 bucket",
+                test_type="positive",
+                required_actions=["s3:GetObject", "kms:Decrypt"],
+                expected_allowed=True,
+                role_id=role_id,
+                tags=["operational", "encryption", "dependency"],
+            )
         )
-    )
 
     # 2. Negative Security Tests (Asserting forbidden behaviors remain blocked)
-    suite.add_test(
-        PolicyRegressionTest(
-            name="negative_deny_iam_administration",
-            description="Ensure candidate cannot grant or retain administrative IAM permissions",
-            test_type="negative",
-            required_actions=["iam:CreateUser", "iam:AttachRolePolicy", "iam:PutRolePolicy"],
-            expected_allowed=False,
-            role_id=role_id,
-            tags=["security", "negative", "privilege_escalation"],
+    # AWS-specific negatives only apply to the AWS demo role; GCP roles get
+    # their own negatives below (generic workflow positives above already cover all roles).
+    if role_id in (None, "PaymentServiceRole"):
+        suite.add_test(
+            PolicyRegressionTest(
+                name="negative_deny_iam_administration",
+                description="Ensure candidate cannot grant or retain administrative IAM permissions",
+                test_type="negative",
+                required_actions=["iam:CreateUser", "iam:AttachRolePolicy", "iam:PutRolePolicy"],
+                expected_allowed=False,
+                role_id=role_id,
+                tags=["security", "negative", "privilege_escalation"],
+            )
         )
-    )
 
-    suite.add_test(
-        PolicyRegressionTest(
-            name="negative_deny_global_wildcard",
-            description="Ensure wildcard '*' is forbidden",
-            test_type="negative",
-            required_actions=["*"],
-            expected_allowed=False,
-            role_id=role_id,
-            tags=["security", "negative", "wildcard"],
+        suite.add_test(
+            PolicyRegressionTest(
+                name="negative_deny_global_wildcard",
+                description="Ensure wildcard '*' is forbidden",
+                test_type="negative",
+                required_actions=["*"],
+                expected_allowed=False,
+                role_id=role_id,
+                tags=["security", "negative", "wildcard"],
+            )
         )
-    )
 
-    suite.add_test(
-        PolicyRegressionTest(
-            name="negative_deny_sensitive_dynamodb_pii",
-            description="Ensure access to sensitive customer PII database remains blocked",
-            test_type="negative",
-            required_actions=["dynamodb:*", "dynamodb:GetItem"],
-            expected_allowed=False,
-            role_id=role_id,
-            tags=["security", "negative", "protected_resource"],
+        suite.add_test(
+            PolicyRegressionTest(
+                name="negative_deny_sensitive_dynamodb_pii",
+                description="Ensure access to sensitive customer PII database remains blocked",
+                test_type="negative",
+                required_actions=["dynamodb:*", "dynamodb:GetItem"],
+                expected_allowed=False,
+                role_id=role_id,
+                tags=["security", "negative", "protected_resource"],
+            )
         )
-    )
 
-    suite.add_test(
-        PolicyRegressionTest(
-            name="negative_deny_sensitive_ec2_prod",
-            description="Ensure access to sensitive production compute infrastructure remains blocked",
-            test_type="negative",
-            required_actions=["ec2:*", "ec2:TerminateInstances"],
-            expected_allowed=False,
-            role_id=role_id,
-            tags=["security", "negative", "protected_resource"],
+        suite.add_test(
+            PolicyRegressionTest(
+                name="negative_deny_sensitive_ec2_prod",
+                description="Ensure access to sensitive production compute infrastructure remains blocked",
+                test_type="negative",
+                required_actions=["ec2:*", "ec2:TerminateInstances"],
+                expected_allowed=False,
+                role_id=role_id,
+                tags=["security", "negative", "protected_resource"],
+            )
         )
-    )
 
-    suite.add_test(
-        PolicyRegressionTest(
-            name="negative_deny_kms_key_deletion",
-            description="Ensure dangerous cryptographic key destruction permissions are blocked",
-            test_type="negative",
-            required_actions=["kms:ScheduleKeyDeletion", "kms:DeleteKey"],
-            expected_allowed=False,
-            role_id=role_id,
-            tags=["security", "negative", "cryptographic_safety"],
+        suite.add_test(
+            PolicyRegressionTest(
+                name="negative_deny_kms_key_deletion",
+                description="Ensure dangerous cryptographic key destruction permissions are blocked",
+                test_type="negative",
+                required_actions=["kms:ScheduleKeyDeletion", "kms:DeleteKey"],
+                expected_allowed=False,
+                role_id=role_id,
+                tags=["security", "negative", "cryptographic_safety"],
+            )
         )
-    )
+
+    # 3. GCP-specific tests (CMEK positive + dangerous-permission negatives)
+    if role_id in (None, "BillingExportSA"):
+        suite.add_test(
+            PolicyRegressionTest(
+                name="gcp_cmek_decryption_preserved",
+                description="Preserve transitive Cloud KMS CMEK decryption when accessing export bucket",
+                test_type="positive",
+                required_actions=["storage.objects.get", "cloudkms.cryptoKeyDecrypter"],
+                expected_allowed=True,
+                role_id=role_id,
+                tags=["operational", "encryption", "dependency"],
+            )
+        )
+
+        suite.add_test(
+            PolicyRegressionTest(
+                name="negative_deny_gcp_project_iam_admin",
+                description="Ensure project-level IAM grant capability remains blocked",
+                test_type="negative",
+                required_actions=["resourcemanager.projects.setIamPolicy"],
+                expected_allowed=False,
+                role_id=role_id,
+                tags=["security", "negative", "privilege_escalation"],
+            )
+        )
+
+        suite.add_test(
+            PolicyRegressionTest(
+                name="negative_deny_gcp_compute_delete",
+                description="Ensure production compute deletion remains blocked",
+                test_type="negative",
+                required_actions=["compute.instances.delete"],
+                expected_allowed=False,
+                role_id=role_id,
+                tags=["security", "negative", "protected_resource"],
+            )
+        )
+
+        suite.add_test(
+            PolicyRegressionTest(
+                name="negative_deny_gcp_kms_destroy",
+                description="Ensure cryptographic key destruction remains blocked",
+                test_type="negative",
+                required_actions=["cloudkms.cryptoKeyDestroy", "cloudkms.cryptoKeyVersions.destroy"],
+                expected_allowed=False,
+                role_id=role_id,
+                tags=["security", "negative", "cryptographic_safety"],
+            )
+        )
 
     return suite
 

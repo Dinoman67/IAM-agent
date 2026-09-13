@@ -236,6 +236,26 @@ class SimulatePolicyTool(BaseTool):
         self.env = env
         self.simulator = PolicySimulator(env)
 
+    def _simulate_core(self, role_id: str, args: SimulatePolicyArgs, prov: str) -> ToolResult:
+        role = self.env.get_role(role_id)
+        if not role:
+            return ToolResult(success=False, error=f"Role '{role_id}' not found.")
+
+        if args.proposed_permissions is not None:
+            perms_to_test = args.proposed_permissions
+        elif args.remove_permissions is not None:
+            current = role.active_permissions()
+            perms_to_test = [p for p in current if p not in args.remove_permissions]
+        else:
+            perms_to_test = role.active_permissions()
+
+        sim_result = self.simulator.simulate(role_id, perms_to_test)
+        return ToolResult(
+            success=True,
+            data=sim_result.model_dump(),
+            metadata={"simulation_success": sim_result.success, "evidence_id": sim_result.evidence_id, "provider": prov},
+        )
+
     def _execute(self, args: SimulatePolicyArgs) -> ToolResult:
         prov = (args.provider or "aws").lower()
         if prov in ("gcp", "azure"):
@@ -279,6 +299,41 @@ class SimulatePolicyChangeTool(SimulatePolicyTool):
 class SimulateChangeTool(SimulatePolicyTool):
     name = "simulate_change"
     description = "Provider-neutral pre-commit simulation of candidate policy changes against application workflows."
+
+
+class EvaluateLocalPolicyTool(SimulatePolicyTool):
+    """Sandbox local policy evaluation for providers without native simulation (e.g. GCP).
+
+    Runs the same deterministic engine as native simulation but is explicitly
+    labeled local evaluation in all outputs — never presented as provider-native.
+    """
+
+    name = "evaluate_local_policy"
+    description = (
+        "Evaluate candidate permissions with the local sandbox engine for providers "
+        "without native simulation. Results are labeled local evaluation, not native simulation."
+    )
+
+    def _execute(self, args: SimulatePolicyArgs) -> ToolResult:
+        prov = (args.provider or "gcp").lower()
+        if prov not in ("gcp",):
+            return ToolResult(
+                success=False,
+                data=None,
+                error=f"UNSUPPORTED_CAPABILITY: Local evaluation is only enabled for GCP (requested '{prov}').",
+                metadata={
+                    "unsupported_capability": True,
+                    "provider": prov,
+                    "operation": "evaluate_local_policy",
+                    "reason": "Local sandbox evaluation is only enabled for GCP.",
+                },
+            )
+        result = self._simulate_core(args.role_id, args, prov)
+        if result.success and isinstance(result.data, dict):
+            result.data["local_evaluation"] = True
+        if isinstance(result.metadata, dict):
+            result.metadata["local_evaluation"] = True
+        return result
 
 
 # =====================================================================
@@ -919,6 +974,7 @@ def create_extended_tool_registry(env: IAMEnvironment) -> ToolRegistry:
     # Phase 3 Provider-Neutral Canonical Tools
     registry.register(ValidateChangeTool(env))
     registry.register(SimulateChangeTool(env))
+    registry.register(EvaluateLocalPolicyTool(env))
     registry.register(VerifyChangeTool(env))
     registry.register(ApplyChangeTool(env))
     registry.register(RollbackChangeTool(env))
