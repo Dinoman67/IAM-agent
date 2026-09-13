@@ -16,6 +16,9 @@
   downloads wired to live endpoints on every completed run.
 - Evidence/Policy/Exports views read the shared run (or preview); Audit lists
   run history lazily and previews read-only.
+- Autonomy tiers: verdicts carry Standard/Sensitive badges with the triggering
+  rule; verdicts auto-release on playback end while the kernel console stays a
+  labeled what-if sandbox (never gating). See `PRODUCT_OVERVIEW.md` §7.
 - Removed: header nav, onboarding modals/tours, dashboard/learn/capabilities
   pages (left unrouted on disk; AuditPage rewritten for the rail),
   marketing-style landing sections.

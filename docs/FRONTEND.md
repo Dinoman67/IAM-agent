@@ -35,13 +35,14 @@ by the FastAPI backend; rebuilt with `cd frontend && npm run build`.
    once, so the UI **plays the run back as a timed process** (~650ms/step):
    flow nodes flip pending → glowing active → done, the LIVE LOG fills with
    curated lines derived from real audit events, auto-scrolling, with `skip ↓`.
-3. **Kernel gate** — the amber box reenacts the real gate data (invariants,
-   blast radius, decision). Type real commands (`help` lists all):
-   `status · invariants · diff · allow · deny · escalate · ack`
-   (`--reason "..."` supported). The verdict below renders **only after a
-   decisive entry** and reflects it (`allow` → verified panel; `deny`/`escalate`
-   → held-for-review with proposed chips; `ack` releases native banners).
-   Command handling is local UI state; the backend run is never altered.
+3. **Kernel gate + autonomy tiers** — the amber box reenacts the real gate data
+   (invariants, blast radius, decision). Every finished run carries a tier badge
+   computed from its own payload: `Standard — auto-applied · human actions: 0`
+   vs `Sensitive — human required · <rule>`. The verdict auto-releases when
+   playback completes; the command console below is an explicitly labeled
+   sandbox (`help/status/invariants/diff/allow/deny/escalate/ack`, `--reason`
+   supported) whose entries render as what-if panels and never gate or reshape
+   the verdict — the backend run already completed alone.
 4. **Verdict + evidence + artifacts** — verdict banner, REMOVED/KEPT chips that
    expand to per-change justifications, and download buttons for `policy.json`
    (final policy), `audit-bundle.json` (hash-chained evidence), and `policy.tf`

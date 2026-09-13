@@ -346,8 +346,28 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
   const kernelBlast: string = secDetails.blast_radius ?? currentRun?.blast_radius ?? 'LOW';
   const kernelArrived = revealed.some((l) => l.stage >= 4) || showResultPre;
   const showKernel = !!currentRun;
-  // On the allow-path the operator's yes/no shapes the final output,
-  // so the verdict waits until they answer.
+  // ---- Autonomy tiers, derived purely from the finished payload ----
+  // Standard: removal-only, gate allowed, blast LOW/MEDIUM → no human needed.
+  // Sensitive: gate denied/escalated, HIGH blast, or a halting stop reason
+  // → a human is required by design. Display-only; engine behavior unchanged.
+  const STOP_RULES: Record<string, string> = {
+    security_block: 'protected capability removal forbidden',
+    provider_mismatch: 'cross-provider mutation forbidden',
+    privilege_expansion_blocked: 'privilege expansion forbidden',
+    unsupported_capability: 'unsupported provider operation',
+    human_approval_required: 'human approval required',
+    insufficient_evidence: 'insufficient evidence for change',
+  };
+  const stopReason = currentRun?.stop_reason ?? '';
+  const blastHigh = kernelBlast === 'HIGH' || kernelBlast === 'CRITICAL';
+  const gateDenied = kernelDecision !== '' && kernelDecision !== 'allow';
+  const tierSensitive =
+    !!currentRun && (gateDenied || blastHigh || STOP_RULES[stopReason] !== undefined);
+  const tierRule =
+    STOP_RULES[stopReason] ??
+    (gateDenied ? `gate ${kernelDecision}` : blastHigh ? `blast radius ${kernelBlast}` : '');
+  // The operator console is a sandbox: it records what-if entries only and
+  // never gates the verdict — the backend run already completed on its own.
   const kernelGateActive = kernelDecision === 'allow' && removed.length > 0;
 
   const pushKernel = (cmd: string, out: string[], tone: KernelEntry['tone']) =>
@@ -361,7 +381,7 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
     const reason = (reasonMatch?.[1] ?? reasonMatch?.[2] ?? '').trim();
 
     if (verb === 'help') {
-      pushKernel(text, ['commands: help · status · invariants · diff · allow · deny · escalate · ack', 'decisive: allow | deny | escalate (releases output) · ack (acknowledge gate)'], 'info');
+      pushKernel(text, ['commands: help · status · invariants · diff · allow · deny · escalate · ack', 'sandbox: allow | deny | escalate explore what-if outcomes · ack acknowledges the gate'], 'info');
       return;
     }
     if (verb === 'status') {
@@ -388,16 +408,17 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
     }
     if (verb === 'allow') {
       if (!kernelGateActive) {
-        pushKernel(text, [`gate decision is ${kernelDecision ? kernelDecision.toUpperCase() : 'unavailable'} — allow not available here; try 'ack'`], 'warn');
+        pushKernel(text, [`gate decision is ${kernelDecision ? kernelDecision.toUpperCase() : 'unavailable'} — recorded as what-if only; try 'ack'`], 'warn');
+        setKernelVerdict({ action: 'allow', reason, raw: text });
         return;
       }
       setKernelVerdict({ action: 'allow', reason, raw: text });
-      pushKernel(text, [`authorized${reason ? ` — ${reason}` : ''}`], 'good');
+      pushKernel(text, [`what-if authorized${reason ? ` — ${reason}` : ''} (verdict above already released on its own)`], 'good');
       return;
     }
     if (verb === 'deny' || verb === 'escalate') {
       setKernelVerdict({ action: verb, reason, raw: text });
-      pushKernel(text, [`${verb} recorded${reason ? ` — ${reason}` : ''} — change held for human review`], 'warn');
+      pushKernel(text, [`what-if ${verb}${reason ? ` — ${reason}` : ''} — change would be held for human review (verdict above unchanged)`], 'warn');
       return;
     }
     if (verb === 'ack') {
@@ -417,9 +438,10 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
     setKernelInput('');
   };
 
-  const showResult = showResultPre && kernelVerdict !== null;
+  // Verdict auto-releases when playback completes — the backend run already
+  // finished alone. Sandbox entries never gate or reshape it.
+  const showResult = showResultPre;
   const heldByOperator = kernelVerdict !== null && (kernelVerdict.action === 'deny' || kernelVerdict.action === 'escalate');
-  const allowedByOperator = kernelVerdict !== null && kernelVerdict.action === 'allow';
 
   return (
     <div className="relative min-h-[calc(100vh-4rem)]">
@@ -617,7 +639,7 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-amber-300" />
               <span className="text-[10px] font-mono tracking-[0.2em] text-amber-200/80">SECURITY KERNEL</span>
-              <span className="ml-auto text-[10px] font-mono text-slate-600">local reenactment</span>
+              <span className="ml-auto text-[10px] font-mono text-slate-600">sandbox — step into the gate</span>
             </div>
             <div className="mt-2.5 font-mono text-xs leading-6">
               {!kernelArrived ? (
@@ -663,7 +685,7 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
         {showKernel && currentRun && kernelArrived && (
           <div className="mt-3 max-w-3xl mx-auto rounded-lg border border-white/15 bg-white/[0.03] p-5 animate-rise-in">
             <div className="text-[11px] font-mono tracking-[0.2em] text-slate-400">
-              KERNEL COMMANDS — TYPE ONE TO PROCEED
+              KERNEL COMMANDS — OPTIONAL SANDBOX PLAY
             </div>
             <div className="mt-3 flex items-center gap-3">
               <span className="text-lg text-sky-300 select-none">›</span>
@@ -705,22 +727,30 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
               ))}
             </div>
             <div className="mt-2 text-[11px] font-mono text-slate-600">
-              decisive commands (release the final output): allow · deny · escalate · ack
+              what-if sandbox: allow · deny · escalate explore alternatives · ack acknowledges — verdict below is already final
             </div>
           </div>
         )}
 
-        {/* FINAL OUTPUT — below the kernel, only after the kernel step resolves */}
-        {showResultPre && !showResult && (
-          <div className="mt-8 text-center animate-rise-in">
-            <p className="text-xs font-mono text-amber-200/80 animate-pulse">
-              Awaiting kernel entry above — type `allow`, `deny`, or `help` to release the final output.
-            </p>
-          </div>
-        )}
+        {/* FINAL OUTPUT — auto-releases when playback completes */}
         {showResult && currentRun && (
           <div key={currentRun.run_id} className="mt-8 max-w-xl mx-auto animate-rise-in">
-            {isCompleted && allowedByOperator && (
+            {/* autonomy tier: who (didn't) need to be involved */}
+            <div className="flex justify-center">
+              <div
+                className={`inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-mono ${
+                  tierSensitive
+                    ? 'border-amber-400/40 bg-amber-400/[0.07] text-amber-200'
+                    : 'border-emerald-400/40 bg-emerald-400/[0.07] text-emerald-200'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${tierSensitive ? 'bg-amber-300' : 'bg-emerald-300'}`} />
+                {tierSensitive
+                  ? `Track: Sensitive — human required${tierRule ? ` · ${tierRule}` : ''}`
+                  : 'Track: Standard — auto-applied · human actions: 0'}
+              </div>
+            </div>
+            {isCompleted && (
               <div className="text-center">
                 <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
                 <h2 className="mt-3 text-2xl font-bold text-white tracking-tight">
@@ -743,15 +773,14 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
             )}
 
             {heldByOperator && (
-              <div className="text-center">
-                <ShieldAlert className="w-8 h-8 text-amber-300 mx-auto" />
-                <h2 className="mt-3 text-2xl font-bold text-white tracking-tight">Held for human review</h2>
-                <p className="mt-2 text-sm text-slate-400">
-                  Operator entered <span className="font-mono text-amber-300">{kernelVerdict?.raw}</span>
+              <div className="mt-6 rounded-lg border border-white/10 bg-white/[0.02] p-4 text-center">
+                <div className="text-[10px] font-mono tracking-[0.2em] text-slate-500">SANDBOX WHAT-IF</div>
+                <p className="mt-1.5 text-[13px] text-slate-400 leading-relaxed">
+                  You entered <span className="font-mono text-amber-300">{kernelVerdict?.raw}</span>
                   {kernelVerdict?.reason && (
                     <> — <span className="text-slate-200">“{kernelVerdict.reason}”</span></>
-                  )} — the change below is the <span className="text-slate-200">proposed</span> removal, escalated
-                  instead of applied. <span className="font-mono text-[11px] text-slate-500">(local reenactment)</span>
+                  )}. Had the gate decided that way, the change would be held for human
+                  review instead of applied. The verdict below is the actual run outcome.
                 </p>
               </div>
             )}
@@ -789,12 +818,12 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
               </div>
             )}
 
-            {/* before / after — verified completions only (proposed labels when operator escalated) */}
-            {removed.length > 0 && ((isCompleted && allowedByOperator) || heldByOperator) && (
+            {/* before / after — the actual run outcome */}
+            {removed.length > 0 && isCompleted && (
               <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
                 <div className="rounded-lg border border-white/10 p-4">
                   <div className="text-[10px] font-mono tracking-[0.2em] text-slate-500">
-                    {heldByOperator ? 'PROPOSED REMOVAL' : 'REMOVED'}
+                    REMOVED
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {removed.map((p) => (
@@ -816,7 +845,7 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
                 </div>
                 <div className="rounded-lg border border-white/10 p-4">
                   <div className="text-[10px] font-mono tracking-[0.2em] text-slate-500">
-                    {heldByOperator ? 'WOULD KEEP' : 'KEPT'}
+                    KEPT
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {kept.map((p) => (
@@ -871,7 +900,7 @@ export const SimulationPage: React.FC<SimulationPageProps> = ({
 
             {kernelVerdict && (
               <p className={`mt-3 text-center text-[11px] font-mono ${kernelVerdict.action === 'allow' ? 'text-emerald-300/80' : 'text-amber-300/80'}`}>
-                operator: {kernelVerdict.raw}{kernelVerdict.reason ? ` — “${kernelVerdict.reason}”` : ''} (local reenactment)
+                sandbox: {kernelVerdict.raw}{kernelVerdict.reason ? ` — “${kernelVerdict.reason}”` : ''} (exploration only — verdict above stands)
               </p>
             )}
 

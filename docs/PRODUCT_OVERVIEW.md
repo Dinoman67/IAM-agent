@@ -67,3 +67,20 @@ pytest -q                         # full test suite
 ```
 
 Operational detail lives in `docs/RUNBOOK.md`; console detail in `docs/FRONTEND.md`.
+
+## 7. Autonomy tiers — is it really automated?
+
+Yes, and the tiers are the proof. The engine sorts every proposed change by itself:
+
+- **Standard track** (removal-only, gate ALLOW, blast LOW/MEDIUM): applies and
+  verifies with **zero human actions**. The console stamps this on the verdict.
+- **Sensitive track** (gate DENY/ESCALATE, HIGH blast, protected capabilities,
+  unsupported operations): halts with a named rule and an escalation artifact —
+  a human is required *by design*, out of band. No silent auto-apply, ever.
+
+There is no human prompt, inbox, or approval click anywhere in the backend loop
+(`human_approval_required` is a terminal stop-reason label, not a waiting state —
+the CLI demos and all 131 tests run headless). The kernel command console in the
+UI is an explicitly labeled sandbox for exploring the gate after the fact; the
+verdict always releases on its own. Removals need no one; security changes stop
+for someone — and the gate, not a person, tells them apart.
