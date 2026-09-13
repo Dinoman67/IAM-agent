@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { AgentRunResponse, DemoScenario, Role, RunSummary, ServiceDependency, Workflow } from './types';
 import { checkHealth, getAgentRun, getPrincipals, listRuns, triggerAgentRun } from './services/api';
 import { LandingPage } from './pages/LandingPage';
@@ -41,11 +41,35 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [summaries, setSummaries] = useState<RunSummary[]>([]);
   const [reviewed, setReviewed] = useState<Set<string>>(() => loadReviewed());
+  // Baseline once: halts that already existed before this session load never
+  // notify — only runs that halt *after* load raise the Review badge.
+  const baselined = useRef(false);
 
   const refreshRuns = async () => {
     try {
       const data = await listRuns();
-      setSummaries(data.runs || []);
+      const runs = data.runs || [];
+      setSummaries(runs);
+      if (!baselined.current) {
+        baselined.current = true;
+        setReviewed((prev) => {
+          const next = new Set(prev);
+          let changed = false;
+          for (const r of runs) {
+            if (isHaltedRun(r.stop_reason) && !next.has(r.run_id)) {
+              next.add(r.run_id);
+              changed = true;
+            }
+          }
+          if (!changed) return prev;
+          try {
+            localStorage.setItem(REVIEWED_KEY, JSON.stringify([...next]));
+          } catch {
+            // ignore
+          }
+          return next;
+        });
+      }
     } catch {
       // badge/queue degrade silently; Review shows its own error state
     }
