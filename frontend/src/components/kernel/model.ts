@@ -76,11 +76,14 @@ export function kindOf(stop?: string | null): { label: string; chip: string; dot
 export interface RecordedProposal {
   remove: string[];
   keep: string[];
-  source: 'diff' | 'replan' | 'candidate' | null;
+  source: 'diff' | 'replan' | 'candidate' | 'attempted' | null;
 }
 
 /** What the simulation actually asked for. Halted pre-apply runs have no
- *  policy_diff — their proposal lives in replans[] / candidate_policy_changes[]. */
+ *  policy_diff — their proposal lives in replans[] / candidate_policy_changes[].
+ *  Runs halted at the gate before proposing (e.g. safety-block) only leave the
+ *  attempted mutation inside tool_called audit events — shown for transparency,
+ *  never approvable. */
 export function recordedProposal(run: AgentRunResponse | null): RecordedProposal {
   const diff = run?.policy_diff;
   if (diff && ((diff.removed?.length ?? 0) + (diff.kept?.length ?? 0) > 0)) {
@@ -99,7 +102,43 @@ export function recordedProposal(run: AgentRunResponse | null): RecordedProposal
   const cands = run?.candidate_policy_changes ?? [];
   const fromCand = pick(cands[cands.length - 1]);
   if (fromCand) return { ...fromCand, source: 'candidate' };
+  // Last resort: the attempted mutation from the audit trail (display only).
+  const attempted = attemptedChange(run);
+  if (attempted.remove.length > 0) return { ...attempted, source: 'attempted' };
   return { remove: [], keep: [], source: null };
+}
+
+/** True only when the backend override endpoint could accept this run:
+ *  a recorded candidate/replan proposal exists. Attempted-only mutations
+ *  (gate halts with no proposal) are display-only by design. */
+export function hasApprovableProposal(run: AgentRunResponse | null): boolean {
+  const replans = run?.replans ?? [];
+  const lastReplan = replans[replans.length - 1];
+  if (lastReplan && ((lastReplan.remove_permissions?.length ?? 0) + (lastReplan.proposed_permissions?.length ?? 0) > 0)) return true;
+  const cands = run?.candidate_policy_changes ?? [];
+  const lastCand = cands[cands.length - 1];
+  if (lastCand && ((lastCand.remove_permissions?.length ?? 0) + (lastCand.proposed_permissions?.length ?? 0) > 0)) return true;
+  return false;
+}
+
+/** The mutation the agent attempted, recovered from tool_called audit events.
+ *  Present even when the gate halted before any proposal was recorded. */
+export function attemptedChange(run: AgentRunResponse | null): { remove: string[]; keep: string[] } {
+  const events = run?.events ?? [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e: any = events[i];
+    if (e?.event_type === 'tool_called' && e?.tool === 'apply_policy_change' && e?.arguments) {
+      const args = e.arguments;
+      const remove: string[] = Array.isArray(args.remove_permissions) ? args.remove_permissions : [];
+      const keep: string[] = Array.isArray(args.new_permissions)
+        ? args.new_permissions
+        : Array.isArray(args.keep_permissions)
+          ? args.keep_permissions
+          : [];
+      if (remove.length > 0 || keep.length > 0) return { remove, keep };
+    }
+  }
+  return { remove: [], keep: [] };
 }
 
 export interface KindNarrative {

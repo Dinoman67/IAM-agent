@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { AgentRunResponse, RunSummary } from '../types';
 import { getAgentRun, requestOverride } from '../services/api';
-import { KERNEL_INVARIANTS, gateLines, getTier, isHaltedRun, kindOf, narrativeOf, recordedProposal } from '../components/kernel/model';
+import { KERNEL_INVARIANTS, gateLines, getTier, hasApprovableProposal, isHaltedRun, kindOf, narrativeOf, recordedProposal } from '../components/kernel/model';
 import { DownloadRow } from '../components/run/DownloadRow';
 
 interface ReviewPageProps {
@@ -86,6 +86,9 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({ summaries, onReviewed, o
   const proposal = recordedProposal(detail);
   const removed: string[] = proposal.remove;
   const kept: string[] = proposal.keep;
+  // Approve form only exists when the backend could accept it. Gate halts
+  // with no recorded proposal (e.g. safety-block) get the by-design note.
+  const approvable = hasApprovableProposal(detail);
 
   const doApprove = async (raw: string, by: string, why: string) => {
     if (!detail || busy) return;
@@ -225,6 +228,12 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({ summaries, onReviewed, o
                       <span className="text-sm font-mono text-slate-500">no recorded proposal on this halt</span>
                     )}
                   </div>
+                  {proposal.source === 'attempted' && (removed.length > 0 || kept.length > 0) && (
+                    <p className="mt-2 text-xs font-mono text-slate-500">
+                      Attempted mutation recovered from the audit trail — blocked before a proposal
+                      existed. Shown for transparency; not approvable.
+                    </p>
+                  )}
                 </div>
 
                 <div className="rounded-lg border border-amber-400/25 bg-amber-400/[0.03] p-5">
@@ -253,6 +262,13 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({ summaries, onReviewed, o
                   <div className="text-[11px] font-mono tracking-[0.2em] text-slate-400">
                     KERNEL COMMANDS — DECISIONS EXECUTE HERE
                   </div>
+                  {!approvable ? (
+                    <p className="mt-3 text-[13px] text-slate-400 leading-relaxed">
+                      This halt class cannot be approved in-product — it stopped before any
+                      candidate policy existed, so there is nothing to authorize. Explorers
+                      below are read-only.
+                    </p>
+                  ) : (
                   <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <label className="flex flex-col gap-1">
                       <span className="text-[10px] font-mono tracking-[0.15em] text-slate-500">APPROVER (REQUIRED)</span>
@@ -275,10 +291,17 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({ summaries, onReviewed, o
                       />
                     </label>
                   </div>
+                  )}
                   <CommandInput
                     onSubmit={(t) => {
                       const v = t.trim().split(/\s+/)[0].toLowerCase();
-                      if (v === 'allow') void doApprove(t, approver, reason);
+                      if (v === 'allow') {
+                        if (!approvable) {
+                          push(t, ['not approvable: this halt recorded no proposal — nothing exists to authorize'], 'bad');
+                          return;
+                        }
+                        void doApprove(t, approver, reason);
+                      }
                       else if (v === 'deny' || v === 'escalate') {
                         push(t, ['refusal recorded — run remains halted (no state changed)'], 'warn');
                         onReviewed(detail.run_id);

@@ -96,6 +96,8 @@ def test_override_refuses_unoverridable_and_applied():
     r = client.post("/api/agent/override",
                     json={"run_id": sb["run_id"], "approved_by": "mallory", "reason": "trust me"})
     assert r.status_code == 400
+    assert "security_block" in r.json()["detail"]
+    assert "cannot be approved in-product" in r.json()["detail"]
     # completed runs cannot be overridden
     ok = client.post("/api/agent/run",
                      json={"goal": "t", "role_id": "PaymentServiceRole", "provider": "aws",
