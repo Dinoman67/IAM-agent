@@ -1,13 +1,3 @@
----
-title: PS10 IAM Least-Privilege Mitigator
-emoji: 🛡️
-colorFrom: indigo
-colorTo: blue
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # PS10 — Autonomous Cloud IAM Least-Privilege Mitigator
 
 > **“A judge-ready, closed-loop autonomous IAM remediation console: Test proposed changes counterfactually, uncover hidden downstream dependencies, adapt dynamically, and enforce least privilege under a deterministic Security Kernel.”**
