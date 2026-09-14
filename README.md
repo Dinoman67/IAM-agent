@@ -12,12 +12,18 @@ pinned: false
 
 > **“A judge-ready, closed-loop autonomous IAM remediation console: Test proposed changes counterfactually, uncover hidden downstream dependencies, adapt dynamically, and enforce least privilege under a deterministic Security Kernel.”**
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Render-46E3B7.svg?style=flat&logo=render)](https://iam-agent-45hd.onrender.com/)
 [![Tests](https://img.shields.io/badge/tests-102%20passing-brightgreen.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](requirements.txt)
 [![FastAPI](https://img.shields.io/badge/FastAPI-3.0.0-009688.svg)](backend/api/main.py)
 [![React](https://img.shields.io/badge/React-18-61DAFB.svg)](frontend/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6.svg)](frontend/)
 [![Phase](https://img.shields.io/badge/phase-5%20judge--ready%20product-emerald.svg)](README.md)
+
+> [!TIP]
+> **🚀 Live Judge Demo (Zero Setup Required):** **[https://iam-agent-45hd.onrender.com/](https://iam-agent-45hd.onrender.com/)**  
+> Click above to immediately launch and evaluate the judge-ready autonomous console directly in your browser. *(Render free tier may take ~30s to wake up if cold).*
+
 
 ---
 
@@ -56,7 +62,13 @@ Least privilege achieved without breaking production workflows
 
 ## 2. Quickstart & One-Click Demo
 
-### Start the Console
+### 🌐 Instant Judge Access (Live Cloud Deployment)
+**No local setup or installation needed.** Test the complete system live:
+👉 **[https://iam-agent-45hd.onrender.com/](https://iam-agent-45hd.onrender.com/)**
+
+---
+
+### Local Console Setup
 ```bash
 ./start.sh
 ```
@@ -73,7 +85,7 @@ pytest -q
 
 To see the complete autonomous closed-loop remediation in under 30 seconds:
 
-1. **Open Console**: Navigate to `http://localhost:8000` in your browser.
+1. **Open Console**: Visit the live deployment at **[`https://iam-agent-45hd.onrender.com/`](https://iam-agent-45hd.onrender.com/)** (or `http://localhost:8000` if running locally).
 2. **Review Initial Posture**:
    - Notice the **TARGET PRINCIPAL: `PaymentServiceRole`** (AWS Production).
    - Currently granted **7 active permissions**, including 3 wildcard administrative grants (`ec2:*`, `iam:*`, `dynamodb:*`).

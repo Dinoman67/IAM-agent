@@ -62,3 +62,8 @@ data/iam_runs.db
 node_modules/
 .npm
 
+# Cloudflare Wrangler
+.wrangler/
+.dev.vars
+.mf/
+
