@@ -1,7 +1,5 @@
 # PS10 — Autonomous Cloud IAM Least-Privilege Mitigator
 
-> **🚀 Live Demo :** **[https://iam-agent-45hd.onrender.com/](https://iam-agent-45hd.onrender.com/)**  
-
 ## 1. Product Principle & Innovation
 
 Most cloud security tools blindly truncate any IAM permission that has zero logged invocations in a 30-day window. This breaks production systems whenever an infrequently invoked workflow (such as annual disaster recovery, year-end billing, or transitive encryption couplings) is called:
