@@ -14,7 +14,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Wrangler v4 requires Node.js >= 22 (fails on Node 20)
+          node-version: 22
           cache: npm
 
       - name: Install Wrangler deps
@@ -27,6 +28,8 @@ jobs:
           npm run build
 
       - name: Deploy to Cloudflare Workers + Containers
+        # Fresh clones/forks have no Cloudflare secrets — skip instead of failing.
+        if: secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != ''
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
